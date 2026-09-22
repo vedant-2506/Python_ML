@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.secret
+secrets/
+credentials/
+
+# Logs and generated datasets
+logs/
+*.log
+Data/*.json
+
+# Raw resume/JD data
+Data/resumes/
+Data/jds/
+
+# Generated outputs
+outputs/
+results/
+generated/
+processed_data/
+
+# Model files
+models/*.pkl
+models/*.joblib
+models/*.pt
+models/*.pth
+models/*.onnx
+
+# Temporary files
+tmp/
+temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Python build files
+build/
+dist/
+*.egg-info/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
