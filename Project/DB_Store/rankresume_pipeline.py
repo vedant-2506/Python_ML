@@ -147,6 +147,9 @@ SECTION_ALIASES = {
     "professional experience": "experience", "internship": "experience",
     "certifications": "certifications", "certificates": "certifications",
     "certificate": "certifications", "certifications achievements": "certifications",
+    "achievements": "certifications", "awards": "certifications", "honors": "certifications",
+    "extra curricular activities": "certifications", "extracurricular activities": "certifications",
+    "extra curricular": "certifications", "accomplishments": "certifications",
     "soft skills": "skills",
 }
 
@@ -511,6 +514,8 @@ def _is_bullet(line: str) -> bool:
 
 def _project_title(line: str, next_line: str = "") -> str | None:
     candidate = re.sub(r"^\(?\d+[.)]\s*", "", line).strip(" :-|")
+    if "|" in candidate:
+        candidate = candidate.split("|", 1)[0].strip(" :-|")
     candidate = re.sub(r"\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*\d{4}\s*(?:--|[-–—]|to)\s*(?:Present|[A-Za-z]+\s*\d{4})$", "", candidate, flags=re.I)
     candidate = re.sub(r"\s+\d{4}\s*[-–—]\s*\d{4}$", "", candidate)
     normalized = re.sub(r"\s+", " ", candidate).strip()
@@ -524,15 +529,19 @@ def _project_title(line: str, next_line: str = "") -> str | None:
         return None
     if re.search(r"\d", normalized) and not re.search(r"\b(?:19|20)\d{2}\b", normalized):
         return None
-    if ("|" in line or "," in line and technology_matches(line) or re.search(r"\b(?:team\s*size|individual\s+project)\b", line, re.I)
+    if ("," in line and technology_matches(line) or re.search(r"\b(?:team\s*size|individual\s+project)\b", line, re.I)
             or len(technology_matches(line)) >= 2):
         return None
     action_start = r"(?:built|developed|designed|implemented|created|worked|applied|contributed|responsible|managed|integrated|used|led|achieved|participated)\b"
     if re.match(action_start, normalized, re.I):
         return None
     has_title_signal = bool(re.match(r"^\d+[.)]", line) or re.search(r"\b(?:19|20)\d{2}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b", line, re.I))
-    next_is_content = _is_bullet(next_line) or _is_metadata(next_line) or bool(next_line)
-    if has_title_signal or (next_is_content and len(normalized.split()) <= 8 and any(char.isupper() for char in normalized)):
+    next_is_content = bool(next_line)
+    title_like = (
+        next_is_content and len(normalized.split()) <= 8 and not _is_bullet(line)
+        and bool(re.match(r"[A-Z][A-Za-z0-9&'()/:+.-]*(?:\s|$)", candidate))
+    )
+    if has_title_signal or title_like:
         return normalized
     return None
 
@@ -551,7 +560,10 @@ def _parse_education(text: str) -> list[dict[str, str]]:
         degree = re.sub(r"\b(?:cgpa|sgpa|gpa)\s*[:=-]?\s*\d+(?:\.\d+)?(?:/\d+)?|\b\d+(?:\.\d+)?\s*%", "", line, flags=re.I)
         degree = re.sub(r"\b(?:19|20)\d{2}\s*[-–—]\s*(?:\d{2,4}|present)\b|\b(?:19|20)\d{2}\b", "", degree, flags=re.I)
         degree = degree.split("|", 1)[0]
+        degree = re.sub(r"^[^A-Za-z0-9]+", "", degree)
+        degree = re.split(r"\s*[-–—]\s*", degree, maxsplit=1)[0]
         degree = re.split(r"\b(?:savitribai|university|college|institute|board)\b", degree, maxsplit=1, flags=re.I)[0]
+        degree = re.split(r"(?:university|college|institute|board)", degree, maxsplit=1, flags=re.I)[0]
         degree = re.sub(r"\b(?:hsc|ssc)\b.*?\s+-\s+.*", lambda match: match.group(0).split(" - ", 1)[0], degree, flags=re.I)
         degree = re.sub(r"\b(?:pursuing|present)\b", "", degree, flags=re.I)
         degree = re.sub(r"\s+", " ", degree).strip(" ,|-:")
@@ -572,17 +584,60 @@ def _parse_projects(text: str) -> list[dict[str, str]]:
                 records.append(current)
             current = {"project_title": title, "description": ""}
             continue
-        if current is None or _is_metadata(line) or re.search(r"https?://|github\.com", line, re.I) or re.search(r"\bteam\s*size\b|\btech\s*stack\b", line, re.I):
+        if current is None or re.search(r"https?://|github\.com", line, re.I) or re.search(r"\bteam\s*size\b|\btech\s*stack\b", line, re.I):
             continue
         if re.search(r"\b(?:19|20)\d{2}\b\s*(?:[-–—]|to)\s*\b(?:19|20)?\d{2,4}\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b.*\b(?:present|\d{4})\b", line, re.I):
             continue
         content = re.sub(r"^\(?cid:\d+\)?\s*", "", line).strip(" •●▪◦*-\t")
+        if re.match(r"^description\s*:", content, re.I):
+            content = re.sub(r"^description\s*:\s*", "", content, flags=re.I)
+        elif re.match(r"^(?:role|duration|team\s*size|responsibilit(?:y|ies))\s*:", content, re.I):
+            continue
         if content:
             current["description"] = f"{current['description']} {content}".strip()
     if current:
         current["description"] = re.sub(r"\s+", " ", current["description"]).strip()
         records.append(current)
     return [record for record in records if record["project_title"].lower() not in INVALID_PROJECT_TITLES]
+
+
+CERTIFICATE_MARKERS = re.compile(
+    r"\b(?:certif\w*|course\s+completion|award|winner|won|champion|championship|"
+    r"first\s+prize|second\s+prize|third\s+prize|\d+(?:st|nd|rd|th)\s+(?:rank|place)|competition|hackathon|"
+    r"best\s+project|achievement|medal|trophy|state[- ]level|national[- ]level|university[- ]level|honou?r)\b", re.I,
+)
+
+
+def _parse_certificates(text: str, certification_section: str) -> list[str]:
+    """Collect explicit credentials and notable achievements without inventing labels."""
+    candidates: list[tuple[str, bool]] = []
+    section_kind = ""
+    for line in _raw_lines(text):
+        heading = re.sub(r"[^a-z ]", "", line.lower()).strip()
+        heading = re.sub(r"\s+", " ", heading)
+        if heading in {"certifications", "certificates", "certificate"}:
+            section_kind = "credentials"
+            continue
+        if heading in {"achievements", "awards", "honors", "extra curricular", "extra curricular activities", "accomplishments"}:
+            section_kind = "achievements"
+            continue
+        if heading in SECTION_ALIASES or heading in {"skills", "education", "projects", "experience", "work experience"}:
+            section_kind = ""
+            continue
+        if section_kind == "credentials" and not re.match(r"^(?:hobbies|interests?)\s*:", line, re.I):
+            candidates.append((line, True))
+        elif section_kind == "achievements" and CERTIFICATE_MARKERS.search(line):
+            candidates.append((line, True))
+    candidates.extend((line, False) for line in _raw_lines(text) if CERTIFICATE_MARKERS.search(line))
+    values: list[str] = []
+    for line, from_section in candidates:
+        value = re.sub(r"^(?:certificate|certification|award|achievement)\s*[:|-]\s*", "", line, flags=re.I)
+        value = re.sub(r"^[-•●▪◦*]+\s*", "", value).strip(" :-|")
+        if value and (from_section or CERTIFICATE_MARKERS.search(line)) and len(value) <= 180 and not re.match(r"^(?:hobbies|interests?)\s*:", value, re.I):
+            normalized = _canonical_text(value)
+            if normalized and normalized not in values:
+                values.append(normalized)
+    return values
 
 
 def parse_resume(raw_text: str) -> dict[str, Any]:
@@ -593,9 +648,8 @@ def parse_resume(raw_text: str) -> dict[str, Any]:
     experience = [{"job_role": line.lower(), "skills": discover_skills(line), "duration": ""}
                   for line in _lines(sections["experience"])
                   if not _is_bullet(line) and not _is_metadata(line) and len(line.split()) <= 15]
-    certificates = [{"certificate_title": line.lower(), "skills": discover_skills(line), "duration": ""}
-                    for line in _lines(sections["certifications"])
-                    if not _is_metadata(line) and line.lower() not in INVALID_EDUCATION_TERMS]
+    certificates = _parse_certificates(raw_text, sections["certifications"])
+    LOGGER.info("Resume extraction counts: projects=%s certificates_or_achievements=%s", len(projects), len(certificates))
     return lowercase_json_values({"skill": list(dict.fromkeys(skills)), "education": education, "project": projects, "experience": experience, "certificate": certificates})
 
 
@@ -656,22 +710,53 @@ def _jd_skill_text(raw_text: str) -> str:
     return "\n".join(selected)
 
 
+ACADEMIC_MARK_CONTEXT = re.compile(
+    r"\b(?:minimum|at\s+least|aggregate|overall|academic|eligib(?:ility|le)|marks?|percentage|"
+    r"degree|bachelor|master|qualification|above|and\s+above|or\s+above)\b", re.I,
+)
+UNRELATED_MARK_CONTEXT = re.compile(
+    r"\b(?:performance|improvement|growth|accuracy|market\s+share|optimization|optimisation|result)\b", re.I,
+)
+
+
+def _academic_mark(raw_text: str) -> str:
+    for line in normalize_whitespace(raw_text).splitlines():
+        for match in re.finditer(r"(?<!\d)(\d{1,3}(?:\.\d+)?)\s*(%|percent(?:age)?)(?=\s|$|[.,;:])", line, re.I):
+            context = line[max(0, match.start() - 90):match.end() + 90]
+            academic_context = ACADEMIC_MARK_CONTEXT.search(context)
+            explicit_academic = re.search(r"\b(?:academic|eligib(?:ility|le)|minimum|aggregate|overall|marks?|percentage)\b", context, re.I)
+            unrelated_context = UNRELATED_MARK_CONTEXT.search(context)
+            if academic_context and (not unrelated_context or explicit_academic):
+                return f"{match.group(1)}%"
+    return ""
+
+
 def parse_jd(raw_text: str, job_title: str | None) -> dict[str, Any]:
     skills = discover_skills(_jd_skill_text(raw_text))
     education = []
+    academic_mark = _academic_mark(raw_text)
     education_pattern = r"((?:bachelor(?:'s)?|master(?:'s)?|b\.?\s*(?:tech|sc)|b\.e|m\.?\s*(?:tech|sc)|degree|diploma)\b[^\n]{0,150})"
     for match in re.finditer(education_pattern, raw_text, re.I):
         degree_text = re.split(r"\||\b(?:company\s+name|location|experience\s*\(\s*years\s*\))\s*:", match.group(1), maxsplit=1, flags=re.I)[0]
         degree_text = re.sub(r"^(?:required\s+)?education\s*:\s*", "", degree_text, flags=re.I).strip(" :,-")
+        degree_text = re.sub(
+            r"\s*(?:,?\s*(?:minimum(?:\s+of)?|at\s+least|overall|aggregate(?:\s+of)?|minimum\s+percentage(?:\s+of)?|minimum\s+marks(?:\s+of)?)\s*\d{1,3}(?:\.\d+)?\s*(?:%|percent(?:age)?)(?:\s+(?:or|and)\s+above)?).*?$",
+            "",
+            degree_text,
+            flags=re.I,
+        ).strip(" :,-")
         if degree_text and not any(item["degree"].lower() == degree_text.lower() for item in education):
-            education.append({"degree": degree_text, "percentage/mark": _score(match.group(1))})
+            education.append({"degree": degree_text, "percentage/mark": _score(match.group(1)) or academic_mark})
+    if academic_mark and not education:
+        education.append({"degree": "", "percentage/mark": academic_mark})
     experience = []
     years_pattern = r"\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\+?\s+years?"
     for match in re.finditer(rf"([^.!\n]{{0,100}}\b{years_pattern}[^.!\n]{{0,100}})", raw_text, re.I):
         years = re.search(years_pattern, match.group(1), re.I).group(0)
         experience.append({"skill": discover_skills(match.group(1)), "years": years.lower()})
     certificates = [line.strip().lower() for line in normalize_whitespace(raw_text).splitlines() if re.search(r"certif|certification", line, re.I)]
-    return lowercase_json_values({"job_title": job_title or "", "expected_skills": skills, "expected_education": education, "expected_experience": experience, "expected_certificate": certificates, "expected_extra_skills": []})
+    LOGGER.info("JD extraction counts: academic_mark=%s education=%s certificates=%s", academic_mark or "none", len(education), len(certificates))
+    return lowercase_json_values({"job_title": job_title or "", "expected_skills": skills, "expected_education": education, "expected_experience": experience, "expected_certificate": certificates})
 
 
 def validate_resume_json(data: dict[str, Any]) -> list[str]:
@@ -700,10 +785,10 @@ def validate_resume_json(data: dict[str, Any]) -> list[str]:
 
 def validate_jd_json(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    expected = {"job_title", "expected_skills", "expected_education", "expected_experience", "expected_certificate", "expected_extra_skills"}
+    expected = {"job_title", "expected_skills", "expected_education", "expected_experience", "expected_certificate"}
     if set(data) != expected:
         errors.append(f"JD keys must be {sorted(expected)}")
-    for key in ("expected_skills", "expected_education", "expected_experience", "expected_certificate", "expected_extra_skills"):
+    for key in ("expected_skills", "expected_education", "expected_experience", "expected_certificate"):
         if not isinstance(data.get(key), list):
             errors.append(f"JD.{key} must be a list")
     for item in data.get("expected_education", []):
@@ -880,7 +965,7 @@ def process_batch(connection, reset: bool = False) -> dict[str, int]:
                 validation_errors = validate_resume_json(structured)
                 if validation_errors:
                     summary["resume_validation_flagged"] += 1
-                    LOGGER.error("Resume JSON validation failed: file=%s errors=%s", path.name, validation_errors)
+                    raise ValueError(f"Resume JSON validation failed: {validation_errors}")
                 else:
                     summary["resume_validation_passed"] += 1
                 cursor.execute("""
@@ -910,7 +995,7 @@ def process_batch(connection, reset: bool = False) -> dict[str, int]:
                 validation_errors = validate_jd_json(structured)
                 if validation_errors:
                     summary["jd_validation_flagged"] += 1
-                    LOGGER.error("JD JSON validation failed: file=%s errors=%s", path.name, validation_errors)
+                    raise ValueError(f"JD JSON validation failed: {validation_errors}")
                 else:
                     summary["jd_validation_passed"] += 1
                 cursor.execute("""
@@ -931,6 +1016,51 @@ def process_batch(connection, reset: bool = False) -> dict[str, int]:
         summary["jd_records"] = cursor.fetchone()[0]
     export_datasets(connection)
     return summary
+
+
+def reprocess_existing_documents(
+    connection,
+    resume_names: Iterable[str] = (),
+    jd_names: Iterable[str] = (),
+) -> dict[str, int]:
+    """Controlled migration for explicitly selected existing source files."""
+    resumes_dir, jds_dir = resolve_input_dirs()
+    selected_resumes = set(resume_names)
+    selected_jds = set(jd_names)
+    updated = {"resumes": 0, "jds": 0}
+    for path in files_in(resumes_dir):
+        if path.name not in selected_resumes or path.suffix.lower() not in RESUME_EXTENSIONS:
+            continue
+        raw = extract_text(path)
+        structured = parse_resume(raw)
+        errors = validate_resume_json(structured)
+        if errors:
+            raise ValueError(f"Resume JSON validation failed for {path.name}: {errors}")
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE candidate SET raw_text=%s, clean_text=%s, structured_data=%s WHERE resume_file_name=%s",
+                (raw, clean_text(raw), Json(structured), path.name),
+            )
+        updated["resumes"] += 1
+    for path in files_in(jds_dir):
+        if path.name not in selected_jds or path.suffix.lower() not in JD_EXTENSIONS:
+            continue
+        raw, source_title = extract_jd_text(path)
+        title = source_title or extract_job_title(raw) or ""
+        structured = parse_jd(raw, title)
+        errors = validate_jd_json(structured)
+        if errors:
+            raise ValueError(f"JD JSON validation failed for {path.name}: {errors}")
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE job_description SET job_title=%s, raw_text=%s, clean_text=%s, structured_data=%s WHERE jd_file_name=%s",
+                (title[:150], raw, clean_text(raw), Json(structured), path.name),
+            )
+        updated["jds"] += 1
+    connection.commit()
+    export_datasets(connection)
+    LOGGER.info("Controlled document reprocessing complete: %s", updated)
+    return updated
 
 
 def print_summary(summary: dict[str, int]) -> None:
