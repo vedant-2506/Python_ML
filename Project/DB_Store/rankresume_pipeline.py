@@ -6,6 +6,7 @@ import hashlib
 import csv
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -25,16 +26,16 @@ except ImportError as error:  # Keep imports usable for schema-only notebook cel
     extract_external_skills = None
     SKILL_EXTRACTOR_IMPORT_ERROR = error
 
-PROJECT_ROOT = "/home/vedant-2506/Desktop/Python_ML/Project/DB_Store"
-DATA_ROOT = Path(PROJECT_ROOT).parent / "Data"
+PROJECT_ROOT = str(Path(__file__).resolve().parent)
+DATA_ROOT = Path(os.environ.get("RANKRESUME_DATA_ROOT", str(Path(PROJECT_ROOT).parent / "Data")))
 RESUMES_DIR = str(DATA_ROOT / "resumes")
 JDS_DIR = str(DATA_ROOT / "jds")
 
-DB_HOST = "localhost"
-DB_PORT = 5432
-DB_NAME = "rankresume"
-DB_USER = "root"
-DB_PASSWORD = "root"
+DB_HOST = os.environ.get("RANKRESUME_DB_HOST", "localhost")
+DB_PORT = int(os.environ.get("RANKRESUME_DB_PORT", "5432"))
+DB_NAME = os.environ.get("RANKRESUME_DB_NAME", "rankresume")
+DB_USER = os.environ.get("RANKRESUME_DB_USER", "root")
+DB_PASSWORD = os.environ.get("RANKRESUME_DB_PASSWORD")
 RESUME_EXTENSIONS = {".pdf", ".docx", ".doc"}
 JD_EXTENSIONS = RESUME_EXTENSIONS | {".csv", ".json"}
 SUPPORTED_EXTENSIONS = RESUME_EXTENSIONS
