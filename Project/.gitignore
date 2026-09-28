@@ -27,8 +27,8 @@ logs/
 Data/*.json
 
 # Raw resume/JD data
-Data/resumes/
-Data/jds/
+#Data/resumes/
+#Data/jds/
 
 # Generated outputs
 outputs/
@@ -64,7 +64,3 @@ dist/
 .coverage
 htmlcov/
 .pytest_cache/
-
-# database files
-DB_Store/rankresume_pipeline.ipynb
-DB_store/rankresume_pipeline.py
