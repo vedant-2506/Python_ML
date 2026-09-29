@@ -64,3 +64,7 @@ dist/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# database files
+DB_Store/rankresume_pipeline.ipynb
+DB_store/rankresume_pipeline.py

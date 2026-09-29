@@ -219,11 +219,7 @@ ALTER TABLE ONLY public.technology_alias
 \unrestrict DBSNAoJ235Uf5suZcQNDFaELLFWuIxh4uAbj6hQ5pZ0opnODapJk9Bvjqku8Pad
 
 
--- Reference/master data only: technology dictionary, aliases, and deduplicated ESCO skills.
-
-\restrict r79V82pSLa280rkQNcXGjC4zo78OonK8j83cDhVIyrSDGriDQim5NplHYvleSpb
-
-
+-- Reference/master data only: technology dictionary, aliases, and deduplicated E
 
 
 COPY public."ESCO_Skills" (esco_id, concept_uri, concept_type, skill_type, reuse_level, preferred_label, alt_labels, hidden_labels, status, modified_date, scope_note) FROM stdin;
@@ -231,7 +227,11 @@ COPY public."ESCO_Skills" (esco_id, concept_uri, concept_type, skill_type, reuse
 17442	http://data.europa.eu/esco/skill/09dd7302-368e-4b3e-b644-7c03a2aae4a2	KnowledgeSkillCompetence	skill/competence	sector-specific	food plant design	food plant designs\nfood plant layouts\ndesign of food plants\nfood plant developments\nfood plant arrangements\ndesign of food plant\nfood plant models	\N	released	2024-02-09 17:29:10.678	\N
 17447	http://data.europa.eu/esco/skill/09f07c6a-866b-4587-a771-45b0cd613540	KnowledgeSkillCompetence	skill/competence	cross-sector	execute advertising for vehicles	achieve advertising measures for the vehicles\nexecute advertising measures for the vehicles\nexecute advertising measure for vehicles\nexecute an advertising measures for the vehicles\nenact advertising measures for the vehicles\nundertake advertising measures for the vehicles\nexecute advertising measures for a vehicle\ncarry out advertising measures for the vehicles	\N	released	2020-06-30 08:31:39.056	\N
 17490	http://data.europa.eu/esco/skill/0ad58425-0691-4da4-b89b-eaa15c09c142	KnowledgeSkillCompetence	skill/competence	occupation-specific	perform liquid penetrant tests	conduct liquid penetrant tests\ncarry out liquid penetrant tests\nengage in liquid penetrant tests\nliquid penetrant tests\nliquid penetrant testing\nperforming liquid penetrant testing	\N	released	2024-02-09 17:29:09.851	\N
-19708	http://data.europa.eu/esco/skill/325fdcce-65be-4a72-b0af-75c4605a9fda	KnowledgeSkillCompetence	skill/competence	sector-specific	operate board slotting machine	control board slotting machine\nactivate board slotting machine\noperate board slotting machines\nuse board slotting machine\noperating board slotting machine\nhandle board slotting machine\nrun board slotting machine	\N	released	2025-02-27 12:45:08.961	\N
+19708	http://data.europa.eu/esco/skill/325fdcce-65be-4a72-b0af-75c4605a9fda	KnowledgeSkillCompetence	skill/competence	sector-specific	operate board slotting machine	control board slotting machine\nactivate board slotting machine\noperate board slotting machines\nuse board slotting machine\noperating board slotting machine\nhandle board slotting SCO skills.
+
+\restrict r79V82pSLa280rkQNcXGjC4zo78OonK8j83cDhVIyrSDGriDQim5NplHYvleSpb
+
+machine\nrun board slotting machine	\N	released	2025-02-27 12:45:08.961	\N
 19837	http://data.europa.eu/esco/skill/34928d4f-16e2-46a7-937a-c46838f550eb	KnowledgeSkillCompetence	knowledge	occupation-specific	pay-per-click	PPC\ndisseminating general corporate information\ncost-per-click\nCPC\ndisseminate corporate information\ndisseminate information for corporation	\N	released	2024-02-09 17:29:09.851	\N
 20960	http://data.europa.eu/esco/skill/4a21c9f4-d3a1-492f-ae6e-edbed5565c56	KnowledgeSkillCompetence	skill/competence	sector-specific	breed geese	supervise breeding of geese\nmanage breeding of geese\nmanaging breeding of geese\nsupervising breeding of geese\ngeese breeding managing\ngeese breeding supervising\nmanaging geese breeding\nsupervise geese breeding\nmanage geese breeding\nsupervising geese breeding	\N	released	2020-06-19 13:36:03.917	\N
 24414	http://data.europa.eu/esco/skill/88323c78-204d-4b96-81ad-6b52add135c0	KnowledgeSkillCompetence	skill/competence	sector-specific	interpret findings from medical examinations	interpret findings from health examinations\nexamine diagnostic tests and procedures\nconsider findings from examinations\nanalyze findings from examinations\nanalyse findings from examinations\ninterpret findings from investigations\ninterpret outcomes of examinations\ninterpret findings from examination\ninterpret outcomes from investigations\ninterpret diagnostic tests and procedures\ninterpret results from examinations	\N	released	2024-02-09 17:29:09.009	\N

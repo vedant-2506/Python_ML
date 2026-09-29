@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,26 +21,40 @@ import psycopg2
 from docx import Document
 from psycopg2.extras import Json, execute_values
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from ATS_calculation.ats_calculator import combine_ats_scores, evaluate_candidate_against_jd, get_ollama_score
+from ATS_calculation.ranking import rank_candidates
+
 try:
     from skill_extractor import extract_skills as extract_external_skills
 except ImportError as error:  # Keep imports usable for schema-only notebook cells.
     extract_external_skills = None
     SKILL_EXTRACTOR_IMPORT_ERROR = error
 
+#<<<<<<< Updated upstream
 PROJECT_ROOT = str(Path(__file__).resolve().parent)
 DATA_ROOT = Path(os.environ.get("RANKRESUME_DATA_ROOT", str(Path(PROJECT_ROOT).parent / "Data")))
 RESUMES_DIR = str(DATA_ROOT / "resumes")
 JDS_DIR = str(DATA_ROOT / "jds")
+#=======
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = PROJECT_ROOT / "Data"
+RESUMES_DIR = DATA_ROOT / "resumes"
+JDS_DIR = DATA_ROOT / "jds"
+#>>>>>>> Stashed changes
 
 DB_HOST = os.environ.get("RANKRESUME_DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("RANKRESUME_DB_PORT", "5432"))
 DB_NAME = os.environ.get("RANKRESUME_DB_NAME", "rankresume")
-DB_USER = os.environ.get("RANKRESUME_DB_USER", "root")
-DB_PASSWORD = os.environ.get("RANKRESUME_DB_PASSWORD")
+DB_USER = os.environ.get("RANKRESUME_DB_USER", "postgres")
+DB_PASSWORD = os.environ.get("RANKRESUME_DB_PASSWORD", "postg")
 RESUME_EXTENSIONS = {".pdf", ".docx", ".doc"}
 JD_EXTENSIONS = RESUME_EXTENSIONS | {".csv", ".json"}
 SUPPORTED_EXTENSIONS = RESUME_EXTENSIONS
-ESCO_SEARCH_ROOT = Path("/home/vedant-2506/Downloads")
+ESCO_SEARCH_ROOT = PROJECT_ROOT
 ESCO_REQUIRED_COLUMNS = {
     "conceptType", "conceptUri", "skillType", "reuseLevel", "preferredLabel",
     "altLabels", "hiddenLabels", "status", "modifiedDate", "scopeNote",
@@ -270,9 +285,13 @@ def normalize_whitespace(text: str) -> str:
     return "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines() if line.strip())
 
 
-def find_esco_skills_csv(search_root: Path = ESCO_SEARCH_ROOT) -> Path:
-    configured = Path(__import__("os").environ["ESCO_SKILLS_CSV"]) if __import__("os").environ.get("ESCO_SKILLS_CSV") else None
-    candidates = [configured] if configured else sorted(search_root.rglob("skills*.csv"))
+def find_esco_skills_csv(search_root: Path | None = None) -> Path:
+    configured = Path(os.environ["ESCO_SKILLS_CSV"]) if os.environ.get("ESCO_SKILLS_CSV") else None
+    if configured:
+        candidates = [configured]
+    else:
+        roots = [search_root] if search_root else [PROJECT_ROOT / "Data", PROJECT_ROOT]
+        candidates = sorted({candidate for root in roots if root.is_dir() for candidate in root.rglob("*.csv")})
     for candidate in candidates:
         if not candidate or not candidate.is_file():
             continue
@@ -641,6 +660,63 @@ def _parse_certificates(text: str, certification_section: str) -> list[str]:
     return values
 
 
+def _extract_experience_years_from_text(text: str) -> float:
+    if not text:
+        return 0.0
+    matches = re.findall(r"(\d+(?:\.\d+)?)\s*(?:months?|month|years?|year)", text, re.I)
+    if not matches:
+        return 0.0
+    values: list[float] = []
+    for match in matches:
+        try:
+            value = float(match)
+        except ValueError:
+            continue
+        values.append(value)
+    return max(values) if values else 0.0
+
+
+def _infer_resume_meta(raw_text: str, skills: list[str], projects: list[dict[str, str]], certificates: list[str]) -> dict[str, Any]:
+    inferred: dict[str, Any] = {
+        "job_title": None,
+        "job_titles": [],
+        "experience": [],
+        "experience_years": [],
+        "achievement": list(certificates),
+    }
+    job_title = extract_job_title(raw_text)
+    if job_title:
+        inferred["job_title"] = job_title
+        inferred["job_titles"] = [job_title]
+
+    project_text = " ".join((f"{p.get('project_title', '') or ''} {p.get('description', '') or ''}" for p in projects))
+    for project in projects:
+        description = project.get("description", "") or ""
+        duration = re.search(r"(\d+(?:\.\d+)?)\s*(?:months?|month|years?|year)", description, re.I)
+        if duration:
+            inferred["experience_years"].append(float(duration.group(1)))
+            inferred["experience"].append({
+                "job_role": job_title or "developer",
+                "duration": duration.group(0),
+                "skills": skills,
+            })
+
+    if not inferred["experience"]:
+        for candidate in re.findall(r"\b(?:\d+(?:\.\d+)?)\s*(?:months?|years?)\b", raw_text, re.I):
+            inferred["experience"].append({"job_role": job_title or "developer", "duration": candidate, "skills": skills})
+            inferred["experience_years"].append(_extract_experience_years_from_text(candidate))
+
+    if not inferred["achievement"]:
+        metric_lines = []
+        for project in projects:
+            description = project.get("description", "") or ""
+            if re.search(r"\b(?:\d+\+|\d+%|\d+\s*\%|under\s*\d+\s*seconds|reduc(?:e|ing)|improv(?:e|ing)|achiev(?:ed|ing)|built|developed|implemented)\b", description, re.I):
+                metric_lines.append(description)
+        inferred["achievement"] = metric_lines
+
+    return inferred
+
+
 def parse_resume(raw_text: str) -> dict[str, Any]:
     sections = split_sections(raw_text)
     skills = discover_skills(sections["skills"] or raw_text)
@@ -650,8 +726,28 @@ def parse_resume(raw_text: str) -> dict[str, Any]:
                   for line in _lines(sections["experience"])
                   if not _is_bullet(line) and not _is_metadata(line) and len(line.split()) <= 15]
     certificates = _parse_certificates(raw_text, sections["certifications"])
-    LOGGER.info("Resume extraction counts: projects=%s certificates_or_achievements=%s", len(projects), len(certificates))
-    return lowercase_json_values({"skill": list(dict.fromkeys(skills)), "education": education, "project": projects, "experience": experience, "certificate": certificates})
+    inferred = _infer_resume_meta(raw_text, skills, projects, certificates)
+    if not experience and inferred["experience"]:
+        experience = inferred["experience"]
+    if not certificates and inferred["achievement"]:
+        certificates = inferred["achievement"]
+    LOGGER.info("Resume extraction counts: projects=%s certificates_or_achievements=%s experience_entries=%s", len(projects), len(certificates), len(experience))
+    payload = {
+        "skill": list(dict.fromkeys(skills)),
+        "education": education,
+        "project": projects,
+        "experience": experience,
+        "certificate": certificates,
+    }
+    if inferred.get("job_title"):
+        payload["job_title"] = inferred["job_title"]
+    if inferred.get("job_titles"):
+        payload["job_titles"] = inferred["job_titles"]
+    if inferred.get("experience_years"):
+        payload["experience_years"] = inferred["experience_years"]
+    if inferred.get("achievement"):
+        payload["achievements"] = inferred["achievement"]
+    return lowercase_json_values(payload)
 
 
 def extract_job_title(raw_text: str) -> str | None:
@@ -763,11 +859,23 @@ def parse_jd(raw_text: str, job_title: str | None) -> dict[str, Any]:
 def validate_resume_json(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     expected = {"skill", "education", "project", "experience", "certificate"}
-    if set(data) != expected:
-        errors.append(f"resume keys must be {sorted(expected)}")
+    optional = {"job_title", "job_titles", "experience_years", "achievements"}
+    keys = set(data)
+    if not expected.issubset(keys) or keys - expected - optional:
+        errors.append(f"resume keys must include {sorted(expected)} and may include {sorted(optional)}")
     for key in ("skill", "education", "project", "experience", "certificate"):
         if not isinstance(data.get(key), list):
             errors.append(f"resume.{key} must be a list")
+    if "job_title" in data and not isinstance(data["job_title"], str):
+        errors.append("resume.job_title must be a string")
+    for key in ("job_titles", "achievements"):
+        if key in data and (not isinstance(data[key], list) or not all(isinstance(item, str) for item in data[key])):
+            errors.append(f"resume.{key} must be a list of strings")
+    if "experience_years" in data and (
+        not isinstance(data["experience_years"], list)
+        or not all(isinstance(item, (int, float)) for item in data["experience_years"])
+    ):
+        errors.append("resume.experience_years must be a list of numbers")
     for item in data.get("education", []):
         if set(item) != {"degree", "mark"} or not all(isinstance(item.get(key), str) for key in ("degree", "mark")):
             errors.append("education record has an invalid schema")
@@ -852,11 +960,25 @@ def create_schema(connection, reset: bool = False) -> None:
             CREATE TABLE IF NOT EXISTS candidate (
                 candidate_id BIGSERIAL PRIMARY KEY, candidate_name VARCHAR(150), email VARCHAR(150), phone VARCHAR(30),
                 resume_file_name VARCHAR(255), resume_hash VARCHAR(64) UNIQUE, raw_text TEXT, clean_text TEXT,
-                structured_data JSONB, ats_score FLOAT, final_score FLOAT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                structured_data JSONB, ats_score FLOAT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS job_description (
                 jd_id BIGSERIAL PRIMARY KEY, job_title VARCHAR(150), jd_file_name VARCHAR(255), raw_text TEXT,
                 clean_text TEXT, structured_data JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS ats_score (
+                id SERIAL PRIMARY KEY,
+                candidate_id INTEGER NOT NULL REFERENCES candidate(candidate_id),
+                jd_id INTEGER,
+                keyword_score NUMERIC(5,2),
+                similarity_score NUMERIC(5,2),
+                title_score NUMERIC(5,2),
+                experience_score NUMERIC(5,2),
+                education_score NUMERIC(5,2),
+                achievement_score NUMERIC(5,2),
+                rule_based_score NUMERIC(5,2),
+                llm_based_score NUMERIC(5,2),
+                computed_at TIMESTAMP DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS technology_dictionary (
                 tech_id BIGSERIAL PRIMARY KEY, canonical_name VARCHAR(100) NOT NULL, category VARCHAR(50),
@@ -876,6 +998,99 @@ def create_schema(connection, reset: bool = False) -> None:
             CREATE INDEX IF NOT EXISTS technology_alias_alias_name_idx ON technology_alias (alias_name);
         """)
     connection.commit()
+
+
+def store_candidate_ats_score(connection, candidate_id: int, jd_id: int, jd_json: dict[str, Any], resume_json: dict[str, Any], llm_score: float | None = None) -> float:
+    factor_result = evaluate_candidate_against_jd(jd_json, resume_json)
+    rule_based_score = float(factor_result.rule_based_score)
+    if llm_score is not None:
+        llm_score_value = float(llm_score)
+    else:
+        llm_score_value = get_ollama_score(jd_json, resume_json)
+    final_score = combine_ats_scores(rule_based_score, llm_score_value)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "DELETE FROM ats_score WHERE candidate_id = %s AND jd_id = %s",
+            (candidate_id, jd_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO ats_score (
+                candidate_id, jd_id, keyword_score, similarity_score, title_score,
+                experience_score, education_score, achievement_score, rule_based_score, llm_based_score
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                candidate_id,
+                jd_id,
+                factor_result.keyword_score,
+                factor_result.similarity_score,
+                factor_result.title_score,
+                factor_result.experience_score,
+                factor_result.education_score,
+                factor_result.achievement_score,
+                rule_based_score,
+                llm_score_value,
+            ),
+        )
+        cursor.execute("UPDATE candidate SET ats_score = %s WHERE candidate_id = %s", (final_score, candidate_id))
+    connection.commit()
+    return final_score
+
+
+def resolve_target_jd_id(connection, jd_id: int | None = None) -> int | None:
+    """Resolve the JD to score; default to JD 2 for comparisons across all resumes."""
+    if jd_id is not None:
+        return jd_id
+
+    env_value = os.environ.get("RANKRESUME_JD_ID")
+    if env_value is not None and env_value.strip():
+        try:
+            return int(env_value)
+        except ValueError:
+            LOGGER.warning("Ignoring invalid RANKRESUME_JD_ID=%r; falling back to JD 2.", env_value)
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT jd_id FROM job_description WHERE jd_id = 2 LIMIT 1")
+        result = cursor.fetchone()
+    return result[0] if result else None
+
+
+def score_all_candidates(connection, jd_id: int | None = None, llm_score_map: dict[int, float] | None = None) -> list[dict[str, Any]]:
+    """Score all candidates against one JD by default, or all JDs when jd_id is explicitly None."""
+    target_jd_id = resolve_target_jd_id(connection, jd_id)
+    with connection.cursor() as cursor:
+        if jd_id is None and target_jd_id is not None:
+            cursor.execute("SELECT jd_id, job_title, structured_data FROM job_description WHERE jd_id = %s ORDER BY jd_id", (target_jd_id,))
+        elif jd_id is None:
+            cursor.execute("SELECT jd_id, job_title, structured_data FROM job_description ORDER BY jd_id")
+        else:
+            cursor.execute("SELECT jd_id, job_title, structured_data FROM job_description WHERE jd_id = %s ORDER BY jd_id", (jd_id,))
+        jds = cursor.fetchall()
+        if not jds:
+            LOGGER.warning("No job descriptions were found to score.")
+            return []
+
+        cursor.execute("SELECT candidate_id, candidate_name, structured_data FROM candidate ORDER BY candidate_id")
+        candidates = cursor.fetchall()
+
+    results: list[dict[str, Any]] = []
+    llm_score_map = llm_score_map or {}
+    for jd_row in jds:
+        jd_record_id, _, jd_json = jd_row
+        jd_data = jd_json if isinstance(jd_json, dict) else json.loads(jd_json or "{}") if isinstance(jd_json, str) else {}
+        for candidate_id, _, resume_json in candidates:
+            candidate_data = resume_json if isinstance(resume_json, dict) else json.loads(resume_json or "{}") if isinstance(resume_json, str) else {}
+            if not jd_data or not candidate_data:
+                continue
+            llm_score = llm_score_map.get(candidate_id)
+            final_score = store_candidate_ats_score(connection, candidate_id, jd_record_id, jd_data, candidate_data, llm_score)
+            results.append({
+                "candidate_id": candidate_id,
+                "jd_id": jd_record_id,
+                "ats_score": final_score,
+            })
+    return results
 
 
 def seed_dictionary(connection) -> None:
@@ -903,11 +1118,6 @@ def resolve_input_dirs() -> tuple[Path, Path]:
     resumes, jds = Path(RESUMES_DIR), Path(JDS_DIR)
     if resumes.is_dir() and jds.is_dir():
         return resumes, jds
-    legacy_resumes = Path(PROJECT_ROOT).parent / "Data" / "resumes"
-    legacy_jds = Path(PROJECT_ROOT).parent / "Data" / "jds"
-    if legacy_resumes.is_dir() and legacy_jds.is_dir():
-        LOGGER.warning("Requested DB_Store/Data paths are missing; using existing project Data/ directories explicitly.")
-        return legacy_resumes, legacy_jds
     return resumes, jds
 
 
@@ -1085,6 +1295,13 @@ def print_summary(summary: dict[str, int]) -> None:
 if __name__ == "__main__":
     database_connection = connect_db()
     try:
-        print_summary(process_batch(database_connection))
+        summary = process_batch(database_connection)
+        print_summary(summary)
+        selected_jd_id = resolve_target_jd_id(database_connection)
+        print(f"\nScoring JD {selected_jd_id} against all resumes.")
+        score_all_candidates(database_connection, jd_id=selected_jd_id)
+        print(f"\nRanked candidates for JD {selected_jd_id}:")
+        for entry in rank_candidates(database_connection):
+            print(entry)
     finally:
         database_connection.close()

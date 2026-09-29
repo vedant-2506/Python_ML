@@ -1,0 +1,6 @@
+pdfplumber
+python-docx
+psycopg2-binary
+skill-extractor
+nbclient
+ipykernel
