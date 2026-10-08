@@ -51,6 +51,7 @@ _as_list = _items  # backwards compatibility
 # --------------------------------------------------------------------------
 # Factor scorers (return None when the JD doesn't ask for that factor)
 # --------------------------------------------------------------------------
+# This function estimates how strongly a required skill matches the resume using direct, implied, and fuzzy evidence.
 def _keyword_strength(keyword: str, skills: list[str], skill_set: set[str],
                       resume_text: str, text_tokens: set[str]) -> float:
     """Estimate evidence strength for one requirement using direct, implied, or fuzzy matches."""
@@ -81,6 +82,7 @@ def _keyword_strength(keyword: str, skills: list[str], skill_set: set[str],
     return 0.0
 
 
+# This function scores all required skills and separates matched terms from missing terms for the evidence report.
 def _keyword_analysis(required: Any, resume_skills: Any, resume_text: str):
     """Score required skills and collect matched/missing terms for factor evidence."""
     keywords: list[str] = []
@@ -106,6 +108,7 @@ def _keyword_analysis(required: Any, resume_skills: Any, resume_text: str):
     return round(total / len(keywords) * 100, 2), matched, missing
 
 
+# This function returns a single keyword score for callers that do not need the detailed match breakdown.
 def calculate_keyword_score(required_keywords: Any, resume_keywords: Any, resume_text: Any = None) -> float:
     """Return a standalone keyword score for callers that do not need full factor details."""
     padded = f" {_canon(resume_text)} " if resume_text else " "
@@ -113,6 +116,7 @@ def calculate_keyword_score(required_keywords: Any, resume_keywords: Any, resume
     return score or 0.0
 
 
+# This function computes cosine similarity between two numeric vectors and returns no value for invalid inputs.
 def _cosine_similarity(first: list[float], second: list[float]) -> Optional[float]:
     """Compare two embedding vectors, returning no score when either vector is unusable."""
     if not first or len(first) != len(second):
@@ -125,6 +129,7 @@ def _cosine_similarity(first: list[float], second: list[float]) -> Optional[floa
     return max(0.0, min(1.0, dot / (first_norm * second_norm)))
 
 
+# This function embeds the reference text and all candidate texts, then compares them to produce similarity scores.
 def _semantic_similarities(reference_text: str, candidate_texts: list[str]) -> Optional[list[float]]:
     """Score texts with a local embedding model, allowing callers to fall back when unavailable."""
     if not candidate_texts:
@@ -148,6 +153,7 @@ def _semantic_similarities(reference_text: str, candidate_texts: list[str]) -> O
     return [similarity for similarity in similarities if similarity is not None]
 
 
+# This function loads and caches the sentence-transformer model so repeated ATS comparisons do not reload it.
 @lru_cache(maxsize=1)
 def _get_embedding_model():
     """Load and cache the configured embedding model so repeated comparisons avoid reloads."""
@@ -159,12 +165,14 @@ def _get_embedding_model():
     return SentenceTransformer(model_name)
 
 
+# This function compares one pair of texts semantically and returns no score when the embedding model is unavailable.
 def _semantic_similarity(first_text: str, second_text: str) -> Optional[float]:
     """Compare one text pair semantically while preserving the model-unavailable fallback."""
     similarities = _semantic_similarities(first_text, [second_text])
     return similarities[0] if similarities else None
 
 
+# This function compares JD and resume term coverage with alias and implied-term expansion when embeddings are unavailable.
 def _lexical_similarity_score(jd_text: str, resume_text: str) -> Optional[float]:
     """Estimate project relevance from normalized term coverage when embeddings are unavailable."""
     jd_raw = {t for t in _tokens(jd_text, stem=True) if len(t) > 2}
@@ -174,6 +182,7 @@ def _lexical_similarity_score(jd_text: str, resume_text: str) -> Optional[float]
     if not res_raw:
         return 0.0
 
+    # This helper expands a text block with aliases and implied terms so the lexical comparison is more robust.
     def expand_terms(text: str) -> set[str]:
         """Expand text with aliases and implied evidence so lexical comparison is less brittle."""
         expanded = set()
@@ -204,6 +213,7 @@ def _lexical_similarity_score(jd_text: str, resume_text: str) -> Optional[float]
     return round(min(100.0, score * SIMILARITY_BOOST), 2)
 
 
+# This function chooses the best available similarity method between semantic and lexical scoring.
 def _similarity_score(jd_text: str, resume_text: str) -> Optional[float]:
     """Choose semantic or lexical similarity and mark empty JD text as inapplicable."""
     if not _tokens(jd_text, stem=True):
@@ -216,6 +226,7 @@ def _similarity_score(jd_text: str, resume_text: str) -> Optional[float]:
     return _lexical_similarity_score(jd_text, resume_text)
 
 
+# This function measures how closely a JD title overlaps with candidate titles using token overlap and subset checks.
 def _lexical_title_similarity(jd_title: str, titles: list[str]) -> float:
     """Score role-title overlap lexically when no semantic model can be used."""
     jd_toks = set(_tokens_from_canonical(jd_title))
@@ -235,6 +246,7 @@ def _lexical_title_similarity(jd_title: str, titles: list[str]) -> float:
     return round(min(100.0, best), 2)
 
 
+# This function compares the job title to resume titles and returns a match score when the titles are available.
 def _estimate_title_similarity(jd_title: Any, resume_titles: Any) -> Optional[float]:
     """Compare the JD title with candidate roles and omit this factor when titles are absent."""
     jd = _canon(jd_title)
@@ -252,6 +264,7 @@ def _estimate_title_similarity(jd_title: Any, resume_titles: Any) -> Optional[fl
     return round(min(100.0, best), 2)
 
 
+# This function converts required and candidate years of experience into a normalized ATS factor score.
 def _calculate_experience_score(required_years: Any, candidate_years: Any) -> Optional[float]:
     """Convert required and candidate tenure into a partial-credit factor score."""
     required = _coerce_float(required_years, 0.0)
@@ -263,12 +276,14 @@ def _calculate_experience_score(required_years: Any, candidate_years: Any) -> Op
     return round(_clamp(100 * (candidate / required) ** 0.7), 2)  # gentle partial credit
 
 
+# This function maps education text to a ranked qualification level so degrees can be compared consistently.
 def _degree_level(text: str) -> int:
     """Map qualification text to an ordered education level for degree comparisons."""
     canon = _canon(text)
     return max((lvl for lvl, pat in _LEVEL_PATTERNS if re.search(pat, canon)), default=0)
 
 
+# This function normalizes percentages, GPA, and CGPA values into the same 0-100 scale used by ATS scoring.
 def _normalize_pct(value: Any) -> float:
     """Convert common GPA, CGPA, and percentage scales to a comparable 0-100 value."""
     x = _coerce_float(value, 0.0)
@@ -285,6 +300,7 @@ _PCT_KEYS = ("percentage", "percentage/mark", "mark", "marks", "grade", "gpa", "
              "minimum_percent")
 
 
+# This function finds the first recognized grade field in an education record so comparisons use a consistent scale.
 def _first_pct(record: Any) -> float:
     """Find the first recognized grade field so education records use a consistent scale."""
     if isinstance(record, dict):
@@ -294,6 +310,7 @@ def _first_pct(record: Any) -> float:
     return 0.0
 
 
+# This function compares the JD's required education level and grade against the candidate's qualifications.
 def _calculate_education_score(required_education: Any, candidate_education: Any) -> Optional[float]:
     """Compare qualification level and grades while excluding education not requested by the JD."""
     req = required_education
@@ -336,6 +353,7 @@ def _calculate_education_score(required_education: Any, candidate_education: Any
     return round(_clamp(best), 2)
 
 
+# This function checks how well the candidate meets the JD's required certifications and achievements.
 def _achievement_score(required_achievements: Any, candidate_achievements: Any) -> Optional[float]:
     """Measure required certificate or achievement coverage without penalizing absent requirements."""
     required = []
@@ -384,6 +402,7 @@ class ATSFactorResult:
     applicable_factors: dict[str, bool] = field(default_factory=dict)
     effective_weights: dict[str, float] = field(default_factory=dict)
 
+    # This method serializes the ATS score breakdown into a simple dictionary for APIs or reporting.
     def to_dict(self) -> dict[str, Any]:
         """Serialize rounded scores and factor metadata for APIs, logs, or database storage."""
         return {
@@ -401,6 +420,7 @@ class ATSFactorResult:
         }
 
 
+# This function flattens the key JD fields into a single text block for comparison logic.
 def _jd_text(jd: dict[str, Any]) -> str:
     """Flatten relevant job-description fields for shared text matching operations."""
     keys = ("job_title", "responsibilities", "required_skills", "expected_skills",
@@ -408,12 +428,14 @@ def _jd_text(jd: dict[str, Any]) -> str:
     return " ".join(part for key in keys for part in _flatten(jd.get(key)))
 
 
+# This function extracts only the skill requirements from the JD so similarity scoring focuses on the right content.
 def _jd_skill_text(jd: dict[str, Any]) -> str:
     """Select requested skills so project similarity is anchored to the job requirements."""
     skills = jd.get("required_skills") or jd.get("expected_skills") or []
     return " ".join(_items(skills))
 
 
+# This function collects resume job titles from supported formats so title matching can compare against the JD.
 def _resume_titles(resume: dict[str, Any]) -> list[Any]:
     """Gather role titles from supported resume shapes for title-fit scoring."""
     titles = list(_items(resume.get("job_titles") or resume.get("previous_job_roles") or [], split=False))
@@ -427,6 +449,7 @@ def _resume_titles(resume: dict[str, Any]) -> list[Any]:
     return titles
 
 
+# This function resolves the JD experience requirement into a numeric year count for scoring.
 def _required_years(jd: dict[str, Any]) -> Optional[float]:
     """Resolve job experience requirements to years so factor scoring handles varied schemas."""
     raw = jd.get("required_experience_years") or jd.get("expected_experience")
@@ -436,6 +459,7 @@ def _required_years(jd: dict[str, Any]) -> Optional[float]:
     return _parse_years(raw)
 
 
+# This function reads the candidate's total experience from known resume fields and defaults to zero when missing.
 def _candidate_years(resume: dict[str, Any]) -> float:
     """Read candidate tenure from known resume fields, defaulting to zero when missing."""
     for key in ("experience_years", "total_experience", "years_of_experience", "experience"):
@@ -445,6 +469,7 @@ def _candidate_years(resume: dict[str, Any]) -> float:
     return 0.0
 
 
+# This function evaluates every applicable ATS factor, calculates the weighted score, and compiles the result evidence.
 def evaluate_candidate_against_jd(jd: dict[str, Any], resume: dict[str, Any]) -> ATSFactorResult:
     """Evaluate all applicable deterministic factors and retain evidence for the final score."""
     jd = _as_dict(jd)
@@ -525,6 +550,7 @@ def evaluate_candidate_against_jd(jd: dict[str, Any], resume: dict[str, Any]) ->
     )
 
 
+# This function returns only the final rule-based ATS score for integrations that need a single scalar value.
 def compute_rule_based_score(jd: dict[str, Any], resume: dict[str, Any]) -> float:
     """Return only the combined rule-based score for integrations that need a scalar."""
     return evaluate_candidate_against_jd(jd, resume).rule_based_score

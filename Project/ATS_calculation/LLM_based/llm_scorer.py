@@ -1,19 +1,154 @@
-"""LLM-backed ATS evaluation using a locally served Ollama model."""
+"""LLM-backed ATS evaluation using the Gemini API."""
 
 from __future__ import annotations
 
+import atexit
+import email.utils
 import json
 import logging
 import os
+import random
 import re
-import urllib.request
+import time
+from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Optional
+
+from dotenv import load_dotenv
+from google import genai
+from google.genai import errors
+from google.genai import types
+
+load_dotenv()
 
 log = logging.getLogger(__name__)
 
 _SCORE_KEYS = ("score", "ats_score", "final_score", "overall_score", "match_score", "fit_score")
 _OUT_OF_100 = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:/|out of)\s*100", re.I)
 _LABELLED = re.compile(r"(?:score|ats|overall|match|fit)\D{0,15}?(\d{1,3}(?:\.\d+)?)", re.I)
+_MAX_RETRIES = 2
+_MAX_RETRY_WAIT_SECONDS = 20.0
+_RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+_gemini_blocked_reason: Optional[str] = None
+
+
+@lru_cache(maxsize=1)
+def _get_gemini_client(api_key: str) -> genai.Client:
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(attempts=1)
+        ),
+    )
+    atexit.register(client.close)
+    return client
+
+
+def reset_gemini_failure_state() -> None:
+    """Allow a new pipeline run to try again after a previous run was blocked."""
+    global _gemini_blocked_reason
+    _gemini_blocked_reason = None
+
+
+def _error_details(exc: errors.APIError) -> tuple[dict[str, Any], list[str], Optional[float]]:
+    payload = exc.details if isinstance(exc.details, dict) else {}
+    error_payload = payload.get("error", payload)
+    details = error_payload.get("details", []) if isinstance(error_payload, dict) else []
+    quota_ids: list[str] = []
+    retry_delay: Optional[float] = None
+
+    if isinstance(details, list):
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            detail_type = str(detail.get("@type", ""))
+            if detail_type.endswith("QuotaFailure"):
+                violations = detail.get("violations", [])
+                if isinstance(violations, list):
+                    quota_ids.extend(
+                        str(violation.get("quotaId") or violation.get("quotaMetric") or "")
+                        for violation in violations
+                        if isinstance(violation, dict)
+                    )
+            elif detail_type.endswith("RetryInfo"):
+                retry_delay = _parse_retry_delay(detail.get("retryDelay"))
+
+    response_headers = getattr(exc.response, "headers", None)
+    if response_headers:
+        header_value = response_headers.get("Retry-After")
+        header_delay = _parse_retry_after_header(header_value)
+        if header_delay is not None:
+            retry_delay = max(retry_delay or 0.0, header_delay)
+    return error_payload if isinstance(error_payload, dict) else {}, quota_ids, retry_delay
+
+
+def _parse_retry_delay(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    if isinstance(value, str):
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)s\s*", value)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _parse_retry_after_header(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            retry_at = email.utils.parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+def _failure_category(
+    code: int, error_payload: dict[str, Any], quota_ids: list[str]
+) -> tuple[str, bool]:
+    status = str(error_payload.get("status") or "").upper()
+    message = str(error_payload.get("message") or "").lower()
+    quota_text = " ".join(quota_ids).lower()
+
+    if code == 429 and any(token in quota_text for token in ("perday", "per_day", "daily")):
+        return "daily quota exhausted", True
+    if any(token in f"{status} {message}" for token in ("billing", "payment", "billingdisabled")):
+        return "billing/project restriction", True
+    if code in {400, 401, 403}:
+        if code == 401 or "api key" in message or "apikey" in message:
+            return "invalid or unauthorized API key", True
+        return "permanent API/project request error", True
+    if code == 404:
+        return "invalid or unavailable model", True
+    if code == 429:
+        return "rate limit", False
+    if code == 503:
+        return "temporary service unavailable", False
+    return f"HTTP {code} API error", code not in _RETRYABLE_STATUS_CODES
+
+
+def _retry_wait_seconds(attempt: int, server_delay: Optional[float]) -> float:
+    exponential = min(0.5 * (2 ** (attempt - 1)), 8.0)
+    if server_delay is not None:
+        return max(exponential, server_delay) + random.uniform(0.0, 0.25)
+    return random.uniform(exponential * 0.75, exponential * 1.25)
+
+
+def _block_gemini(reason: str, code: int, quota_ids: list[str]) -> None:
+    global _gemini_blocked_reason
+    _gemini_blocked_reason = reason
+    quota_text = f" quota_ids={','.join(quota_ids)}" if quota_ids else ""
+    log.error(
+        "Gemini scoring circuit opened: status=%s reason=%s%s; further requests "
+        "are suppressed for this pipeline run",
+        code,
+        reason,
+        quota_text,
+    )
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -93,52 +228,130 @@ def get_ollama_evaluation(
     model: Optional[str] = None,
     timeout: Optional[float] = None,
 ) -> Optional[dict[str, Any]]:
-    """Request and parse one independent Ollama assessment, returning None if transport or parsing fails."""
+    """Request and parse one independent Gemini assessment."""
+    global _gemini_blocked_reason
     jd, resume = _as_dict(jd_payload), _as_dict(resume_payload)
-    url = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-    body = {
-        "model": model or os.environ.get("OLLAMA_MODEL", "llama3.2:latest"),
-        "prompt": _build_llm_prompt(jd, resume),
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0},
-    }
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    timeout_value = timeout if timeout is not None else float(os.environ.get("OLLAMA_TIMEOUT", "120"))
-    try:
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_value) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except TypeError:
-            with urllib.request.urlopen(request) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        log.warning("Ollama request failed: %s", exc)
+    if _gemini_blocked_reason is not None:
         return None
 
-    raw = payload.get("response") if isinstance(payload, dict) else payload
-    score = extract_numeric_score(raw)
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        log.warning("GEMINI_API_KEY is not configured")
+        return None
+
+    try:
+        timeout_value = (
+            timeout
+            if timeout is not None
+            else float(os.environ.get("GEMINI_TIMEOUT", "120"))
+        )
+        client = _get_gemini_client(api_key)
+        total_wait = 0.0
+        raw = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = client.models.generate_content(
+                    model=model
+                    or os.environ.get("GEMINI_MODEL", "models/gemini-3.1-flash-lite"),
+                    contents=_build_llm_prompt(jd, resume),
+                    config=types.GenerateContentConfig(
+                        temperature=0,
+                        response_mime_type="application/json",
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                            disable=True
+                        ),
+                        http_options=types.HttpOptions(
+                            timeout=int(timeout_value * 1000),
+                            retry_options=types.HttpRetryOptions(attempts=1),
+                        ),
+                    ),
+                )
+                raw = response.text
+                break
+            except errors.APIError as exc:
+                error_payload, quota_ids, server_delay = _error_details(exc)
+                category, permanent = _failure_category(exc.code, error_payload, quota_ids)
+                if permanent:
+                    _block_gemini(category, exc.code, quota_ids)
+                    return None
+                if exc.code not in _RETRYABLE_STATUS_CODES:
+                    log.warning(
+                        "Gemini request failed: status=%s reason=%s",
+                        exc.code,
+                        category,
+                    )
+                    return None
+                if attempt >= _MAX_RETRIES:
+                    _block_gemini(category, exc.code, quota_ids)
+                    return None
+
+                delay = _retry_wait_seconds(attempt + 1, server_delay)
+                if (
+                    delay > _MAX_RETRY_WAIT_SECONDS
+                    or total_wait + delay > _MAX_RETRY_WAIT_SECONDS
+                ):
+                    _block_gemini(
+                        f"{category}; retry delay exceeds the configured wait limit",
+                        exc.code,
+                        quota_ids,
+                    )
+                    return None
+                total_wait += delay
+                log.warning(
+                    "Gemini transient failure: status=%s reason=%s; "
+                    "retry %s/%s in %.2f seconds%s",
+                    exc.code,
+                    category,
+                    attempt + 1,
+                    _MAX_RETRIES,
+                    delay,
+                    f" quota_ids={','.join(quota_ids)}" if quota_ids else "",
+                )
+                time.sleep(delay)
+            except Exception as exc:
+                _gemini_blocked_reason = f"unexpected {type(exc).__name__}"
+                log.error(
+                    "Gemini request failed: reason=%s; further requests are "
+                    "suppressed for this pipeline run",
+                    _gemini_blocked_reason,
+                )
+                return None
+    except (TypeError, ValueError) as exc:
+        _gemini_blocked_reason = f"invalid Gemini configuration ({type(exc).__name__})"
+        log.error(
+            "Gemini request failed: reason=%s; further requests are suppressed "
+            "for this pipeline run",
+            _gemini_blocked_reason,
+        )
+        return None
+
+    if not isinstance(raw, str) or not raw.strip():
+        log.warning("Gemini returned an empty or non-text response")
+        return None
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        log.warning("Gemini returned malformed JSON")
+        return None
+
+    if not isinstance(parsed, dict):
+        log.warning("Gemini returned JSON that was not an object")
+        return None
+
+    score = extract_numeric_score(parsed)
     if score is None:
-        log.warning("Could not read a score from Ollama response: %r", raw)
+        log.warning("Could not read a valid score from Gemini response")
         return None
     reason = ""
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        if isinstance(parsed, dict):
-            reason = str(parsed.get("reason") or "")
-    except (json.JSONDecodeError, TypeError):
-        pass
+    if isinstance(parsed, dict):
+        reason = str(parsed.get("reason") or "")
     return {"score": round(score, 2), "reason": reason}
 
 
 def get_ollama_score(
     jd_payload: Any, resume_payload: Any, model: Optional[str] = None
 ) -> Optional[float]:
-    """Return only the Ollama score for callers that do not need its explanatory reason."""
+    """Return only the Gemini score for callers that do not need its reason."""
     result = get_ollama_evaluation(jd_payload, resume_payload, model)
     return result["score"] if result else None

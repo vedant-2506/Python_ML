@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from .LLM_based.llm_scorer import (
@@ -19,6 +20,7 @@ from .rule_based.rule_based_calculator import (
 )
 
 RULE_WEIGHT = 0.60
+log = logging.getLogger(__name__)
 
 
 def combine_ats_scores(
@@ -42,11 +44,14 @@ def compute_final_ats(
     factors = evaluate_candidate_against_jd(jd, resume)
     llm = get_ollama_evaluation(jd, resume, model) if use_llm else None
     llm_score = llm["score"] if llm else None
+    scoring_mode = "hybrid" if llm_score is not None else "rule-only"
+    log.info("ATS score calculated in %s mode", scoring_mode)
     return {
         "rule_based_score": factors.rule_based_score,
         "llm_based_score": llm_score,
         "llm_reason": llm["reason"] if llm else "",
         "final_ats_score": combine_ats_scores(factors.rule_based_score, llm_score),
+        "scoring_mode": scoring_mode,
         "factors": factors.to_dict(),
     }
 
