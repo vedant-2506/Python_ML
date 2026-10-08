@@ -1,0 +1,89 @@
+Planned distribution:
+Object-Oriented Programming (OOP)          250
+Data Structures                            250
+Algorithms                                 250
+Database Management Systems (DBMS)         250
+SQL                                        250
+Computer Networks                          250
+Operating Systems                          250
+Software Engineering                       250
+Software Development Life Cycle (SDLC)     250
+System Design Fundamentals                 250
+Computer Architecture                      250
+Programming Fundamentals                   250
+Git / Version Control                      250
+Software Testing Fundamentals              250
+Java                                       121
+Python                                     121
+JavaScript                                 121
+C++                                        121
+C                                          121
+C#                                         121
+Go / Golang                                121
+TypeScript                                 121
+Kotlin                                     121
+PHP                                        121
+Ruby                                       121
+Rust                                       121
+Dart                                       121
+Scala                                      121
+
+Generating missing records in committed batches...
+Object-Oriented Programming (OOP)          target= 250 existing= 250 inserted=  50
+Data Structures                            target= 250 existing= 250 inserted=  50
+Algorithms                                 target= 250 existing= 250 inserted=  50
+Database Management Systems (DBMS)         target= 250 existing= 250 inserted=  50
+SQL                                        target= 250 existing= 250 inserted=  50
+Computer Networks                          target= 250 existing= 250 inserted=  50
+Operating Systems                          target= 250 existing= 250 inserted=  50
+Software Engineering                       target= 250 existing= 250 inserted=  50
+Software Development Life Cycle (SDLC)     target= 250 existing= 250 inserted=  50
+System Design Fundamentals                 target= 250 existing= 250 inserted=  50
+Computer Architecture                      target= 250 existing= 250 inserted=  50
+Programming Fundamentals                   target= 250 existing= 250 inserted=  50
+Git / Version Control                      target= 250 existing= 250 inserted=  50
+Software Testing Fundamentals              target= 250 existing= 250 inserted=  50
+Java                                       target= 121 existing= 121 inserted= 121
+Python                                     target= 121 existing= 121 inserted= 121
+JavaScript                                 target= 121 existing= 121 inserted= 121
+C++                                        target= 121 existing= 121 inserted= 121
+C                                          target= 121 existing= 121 inserted= 121
+C#                                         target= 121 existing= 121 inserted= 121
+Go / Golang                                target= 121 existing= 121 inserted= 121
+TypeScript                                 target= 121 existing= 121 inserted= 121
+Kotlin                                     target= 121 existing= 121 inserted= 121
+PHP                                        target= 121 existing= 121 inserted= 121
+Ruby                                       target= 121 existing= 121 inserted= 121
+Rust                                       target= 121 existing= 121 inserted= 121
+Dart                                       target= 121 existing= 121 inserted= 121
+Scala                                      target= 121 existing= 121 inserted= 121
+{
+  "Object-Oriented Programming (OOP)": 50,
+  "Data Structures": 50,
+  "Algorithms": 50,
+  "Database Management Systems (DBMS)": 50,
+  "SQL": 50,
+  "Computer Networks": 50,
+  "Operating Systems": 50,
+  "Software Engineering": 50,
+  "Software Development Life Cycle (SDLC)": 50,
+  "System Design Fundamentals": 50,
+  "Computer Architecture": 50,
+  "Programming Fundamentals": 50,
+  "Git / Version Control": 50,
+  "Software Testing Fundamentals": 50,
+  "Java": 121,
+  "Python": 121,
+  "JavaScript": 121,
+  "C++": 121,
+  "C": 121,
+  "C#": 121,
+  "Go / Golang": 121,
+  "TypeScript": 121,
+  "Kotlin": 121,
+  "PHP": 121,
+  "Ruby": 121,
+  "Rust": 121,
+  "Dart": 121,
+  "Scala": 121
+}
