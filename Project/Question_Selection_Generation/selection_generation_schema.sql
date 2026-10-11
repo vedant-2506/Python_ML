@@ -47,3 +47,37 @@ CREATE TABLE IF NOT EXISTS public.question_exam (
 
 CREATE INDEX IF NOT EXISTS generated_questions_exam_idx ON public.generated_questions (exam_id);
 CREATE INDEX IF NOT EXISTS question_exam_exam_idx ON public.question_exam (exam_id, question_order);
+
+-- Stage 1 is one six-question snapshot per session.  These indexes do not
+-- prevent a Question Bank row from being reused by a different JD/session.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.question_exam
+        WHERE stage = 1
+        GROUP BY exam_id, question_id
+        HAVING question_id IS NOT NULL AND COUNT(*) > 1
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS question_exam_stage1_question_uq
+            ON public.question_exam (exam_id, question_id)
+            WHERE stage = 1 AND question_id IS NOT NULL;
+    ELSE
+        RAISE NOTICE 'Skipped stage-1 question-id uniqueness index because existing duplicates require review';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.question_exam
+        WHERE stage = 1
+        GROUP BY exam_id, lower(regexp_replace(trim(question), '\s+', ' ', 'g'))
+        HAVING COUNT(*) > 1
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS question_exam_stage1_text_uq
+            ON public.question_exam
+            (exam_id, lower(regexp_replace(trim(question), '\s+', ' ', 'g')))
+            WHERE stage = 1;
+    ELSE
+        RAISE NOTICE 'Skipped stage-1 text uniqueness index because existing duplicates require review';
+    END IF;
+END $$;
