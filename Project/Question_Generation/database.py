@@ -14,8 +14,8 @@ def connect() -> connection:
         host=os.getenv("RANKRESUME_DB_HOST", "localhost"),
         port=int(os.getenv("RANKRESUME_DB_PORT", "5432")),
         dbname=os.getenv("RANKRESUME_DB_NAME", "rankresume"),
-        user=os.getenv("RANKRESUME_DB_USER", "root"),
-        password=os.getenv("RANKRESUME_DB_PASSWORD", "root"),
+        user=os.getenv("RANKRESUME_DB_USER", "postgres"),
+        password=os.getenv("RANKRESUME_DB_PASSWORD", "postg"),
     )
 
 

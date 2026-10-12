@@ -1,6 +1,11 @@
 import unittest
+from unittest.mock import patch
 
-from Question_Selection_Generation.llm_question_generator import validate_generated_questions
+from Question_Selection_Generation.llm_question_generator import (
+    OllamaUnavailableError,
+    generate_stage2_questions,
+    validate_generated_questions,
+)
 
 
 def payload(difficulties=None):
@@ -27,6 +32,21 @@ class LLMGenerationTests(unittest.TestCase):
         bad["questions"][0]["skill"] = "OOP"
         with self.assertRaises(ValueError):
             validate_generated_questions(bad, ["Spring Boot"], {"Hard": 2, "Easy": 2}, [])
+
+    @patch("Question_Selection_Generation.llm_question_generator.call_ollama")
+    @patch("Question_Selection_Generation.llm_question_generator.check_ollama", return_value=False)
+    def test_generation_fails_fast_when_ollama_is_unavailable(self, check_ollama, call_ollama):
+        with self.assertRaisesRegex(OllamaUnavailableError, "ollama serve"):
+            generate_stage2_questions({}, ["Spring Boot"], 90, [])
+        call_ollama.assert_not_called()
+
+    @patch("Question_Selection_Generation.llm_question_generator.call_ollama")
+    @patch("Question_Selection_Generation.llm_question_generator.check_ollama", return_value=True)
+    def test_connection_failure_is_not_retried(self, check_ollama, call_ollama):
+        call_ollama.side_effect = OllamaUnavailableError("server stopped")
+        with self.assertRaises(OllamaUnavailableError):
+            generate_stage2_questions({}, ["Spring Boot"], 90, [], {"Spring Boot": 90})
+        call_ollama.assert_called_once()
 
 
 if __name__ == "__main__":

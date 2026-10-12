@@ -30,6 +30,10 @@ class GeneratedQuestion:
     expected_concepts: list[str]
 
 
+class OllamaUnavailableError(RuntimeError):
+    """Raised when the configured Ollama server or model cannot be reached."""
+
+
 def sentence_count(text: str) -> int:
     return len([part for part in SENTENCE_PATTERN.split(text.strip()) if part.strip()])
 
@@ -78,7 +82,10 @@ def call_ollama(prompt: str, model: str = OLLAMA_MODEL, timeout: float = OLLAMA_
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"Ollama HTTP error for model {model}: {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"Ollama is unavailable at {OLLAMA_URL}: {exc}") from exc
+        raise OllamaUnavailableError(
+            f"Ollama is unavailable at {OLLAMA_URL}. Start it with `ollama serve`, "
+            f"then retry. Details: {exc}"
+        ) from exc
     if payload.get("model") and payload["model"] != model:
         raise RuntimeError(f"Ollama returned model {payload['model']!r}, expected {model!r}")
     return _decode_json(payload.get("response", payload))
@@ -136,12 +143,21 @@ def generate_stage2_questions(
     model: str = OLLAMA_MODEL,
     retries: int = 2,
 ) -> list[GeneratedQuestion]:
+    if not check_ollama(model):
+        raise OllamaUnavailableError(
+            f"Cannot reach Ollama at {OLLAMA_URL} or model {model!r} is missing. "
+            f"Start Ollama with `ollama serve` and, if needed, install the model "
+            f"with `ollama pull {model}`, then rerun this cell."
+        )
+
     distribution = determine_stage2_difficulty(average)
     prompt = build_adaptive_prompt(jd, changing_skills, average, distribution, used_questions, skill_performance)
     last_error: Exception | None = None
     for _ in range(retries + 1):
         try:
             return validate_generated_questions(call_ollama(prompt, model), changing_skills, distribution, used_questions)
+        except OllamaUnavailableError:
+            raise
         except (RuntimeError, ValueError, KeyError, TypeError) as exc:
             last_error = exc
     raise RuntimeError(f"Could not generate valid adaptive questions after {retries + 1} attempts: {last_error}")
