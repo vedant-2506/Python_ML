@@ -329,14 +329,9 @@ def average_score(scores: Iterable[float]) -> float:
 
 
 def determine_stage2_difficulty(score: float) -> dict[str, int]:
-    score = float(score)
-    if not 0 <= score <= 100:
-        raise ValueError("average score must be between 0 and 100")
-    if score >= 81:
-        return {"Hard": 4}
-    if score >= 60:
-        return {"Hard": 2, "Easy": 2}
-    return {"Easy": 4}
+    from .adaptive_policy import determine_stage2_difficulty as _determine_stage2_difficulty
+
+    return _determine_stage2_difficulty(score)
 
 
 def serialize_jd_context(jd: dict[str, Any]) -> str:

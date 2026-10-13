@@ -48,6 +48,86 @@ CREATE TABLE IF NOT EXISTS public.question_exam (
 CREATE INDEX IF NOT EXISTS generated_questions_exam_idx ON public.generated_questions (exam_id);
 CREATE INDEX IF NOT EXISTS question_exam_exam_idx ON public.question_exam (exam_id, question_order);
 
+-- Candidate-specific Stage 2 snapshot.  The unquoted PostgreSQL name is
+-- intentionally lowercase; it represents the requested AI_Question_Exam table.
+CREATE TABLE IF NOT EXISTS public.ai_question_exam (
+    ai_question_exam_id BIGSERIAL PRIMARY KEY,
+    exam_id UUID NOT NULL REFERENCES public.exam_sessions(exam_id),
+    jd_id BIGINT NOT NULL REFERENCES public.job_description(jd_id),
+    candidate_id BIGINT NOT NULL REFERENCES public.candidate(candidate_id),
+    question_order SMALLINT NOT NULL CHECK (question_order BETWEEN 1 AND 4),
+    source VARCHAR(30) NOT NULL DEFAULT 'groq_llm' CHECK (source = 'groq_llm'),
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    expected_concepts JSONB NOT NULL,
+    difficulty VARCHAR(20) NOT NULL CHECK (difficulty IN ('Easy', 'Medium', 'Hard')),
+    skill VARCHAR(200) NOT NULL,
+    question_hash CHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (exam_id, candidate_id, question_order),
+    UNIQUE (exam_id, candidate_id, question_hash)
+);
+
+ALTER TABLE public.ai_question_exam
+    ADD COLUMN IF NOT EXISTS reference_answer TEXT;
+
+ALTER TABLE public.ai_question_exam
+    ADD COLUMN IF NOT EXISTS model_name VARCHAR(200);
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ai_question_exam_exam_id_question_order_key'
+    ) THEN
+        ALTER TABLE public.ai_question_exam DROP CONSTRAINT ai_question_exam_exam_id_question_order_key;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ai_question_exam_exam_id_candidate_id_question_order_key'
+    ) THEN
+        ALTER TABLE public.ai_question_exam ADD CONSTRAINT ai_question_exam_exam_id_candidate_id_question_order_key UNIQUE (exam_id, candidate_id, question_order);
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ai_question_exam_exam_id_question_hash_key'
+    ) THEN
+        ALTER TABLE public.ai_question_exam DROP CONSTRAINT ai_question_exam_exam_id_question_hash_key;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ai_question_exam_exam_id_candidate_id_question_hash_key'
+    ) THEN
+        ALTER TABLE public.ai_question_exam ADD CONSTRAINT ai_question_exam_exam_id_candidate_id_question_hash_key UNIQUE (exam_id, candidate_id, question_hash);
+    END IF;
+END $$;
+
+UPDATE public.ai_question_exam
+SET reference_answer = answer
+WHERE reference_answer IS NULL;
+
+UPDATE public.ai_question_exam
+SET model_name = 'unknown'
+WHERE model_name IS NULL;
+
+ALTER TABLE public.ai_question_exam
+    ALTER COLUMN reference_answer SET NOT NULL,
+    ALTER COLUMN model_name SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS ai_question_exam_candidate_idx
+    ON public.ai_question_exam (candidate_id, jd_id, exam_id);
+
+DO $$
+BEGIN
+    IF to_regclass('public.answer_evaluation') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint
+           WHERE conname = 'answer_evaluation_exam_id_fkey'
+             AND conrelid = 'public.answer_evaluation'::regclass
+       ) THEN
+        ALTER TABLE public.answer_evaluation
+            ADD CONSTRAINT answer_evaluation_exam_id_fkey
+            FOREIGN KEY (exam_id) REFERENCES public.exam_sessions(exam_id);
+    END IF;
+END $$;
+
 -- Stage 1 is one six-question snapshot per session.  These indexes do not
 -- prevent a Question Bank row from being reused by a different JD/session.
 DO $$

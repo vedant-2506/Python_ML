@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS public.answer_evaluation (
     evaluation_id BIGSERIAL PRIMARY KEY,
     candidate_id INTEGER,
+    exam_id UUID,
     jd_id BIGINT NOT NULL,
     question_id BIGINT NOT NULL,
     expected_answer TEXT,
@@ -22,6 +23,9 @@ ALTER TABLE public.answer_evaluation
     ADD COLUMN IF NOT EXISTS candidate_id INTEGER;
 
 ALTER TABLE public.answer_evaluation
+    ADD COLUMN IF NOT EXISTS exam_id UUID;
+
+ALTER TABLE public.answer_evaluation
     DROP COLUMN IF EXISTS attempt_id,
     DROP COLUMN IF EXISTS legacy_attempt_id;
 
@@ -34,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_answer_evaluation_jd_question
 DROP INDEX IF EXISTS public.idx_answer_evaluation_attempt_question;
 
 CREATE INDEX IF NOT EXISTS idx_answer_evaluation_candidate_question
-    ON public.answer_evaluation (candidate_id, jd_id, question_id, evaluation_id);
+    ON public.answer_evaluation (candidate_id, jd_id, exam_id, question_id, evaluation_id);
 
 CREATE INDEX IF NOT EXISTS idx_answer_evaluation_status
     ON public.answer_evaluation (evaluation_status);

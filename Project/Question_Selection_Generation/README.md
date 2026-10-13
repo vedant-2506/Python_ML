@@ -1,5 +1,47 @@
 # RankResume — Question Selection & Generation
 
+## Stage overview
+
+RankResume keeps the existing Stage 1 Question Bank workflow unchanged: the JD
+`expected_skills` are classified into Core, Changeable, and Unclassified skills,
+then exactly six `bankresume` questions are snapshotted into `question_exam` as
+3 Easy (6 marks), 2 Medium (12 marks), and 1 Hard (18 marks), for 60 marks.
+The candidate's six completed `answer_evaluation` rows drive the new Stage 2
+workflow. It calculates marks out of 60, rounds the percentage, and generates
+exactly four Groq questions from the JD's Changeable Skills:
+
+| Rounded percentage | Stage 2 distribution |
+| ---: | --- |
+| 0–59 | 3 Easy + 1 Medium |
+| 60–80 | 2 Easy + 2 Medium |
+| 81–100 | 3 Medium + 1 Hard |
+
+Stage 2 is implemented in `adaptive_policy.py`, `groq_client.py`,
+`llm_question_generator.py`, and `stage2_workflow.py`. The dedicated
+`LLM_Question_Generation.ipynb` requires explicit exam, JD, and candidate IDs.
+It reuses a valid batch and refuses incomplete or ambiguous evaluation data.
+
+### Stage 2 setup and safety
+
+1. Configure `GROQ_API_KEY`, `GROQ_MODEL`, and `LLM_PROVIDER=groq` in a local
+   `.env` copied from `.env.example`; never commit `.env` or credentials.
+2. Apply `selection_generation_schema.sql` after the existing Stage 1 schema.
+   PostgreSQL stores the requested `AI_Question_Exam` table as the conventional
+   lowercase `public.ai_question_exam`. It references `exam_sessions`,
+   `job_description`, and `candidate`, and uniquely constrains `(exam_id,
+   question_order)` and `(exam_id, question_hash)`.
+3. The migration adds nullable `answer_evaluation.exam_id` and its foreign key
+   when the Stage 2 schema is applied. Existing rows are preserved. New
+   submission callers should populate this field when an exam attempt is known.
+4. Run `python -m unittest discover -s Question_Selection_Generation/tests`
+   for deterministic policy and validation tests. Run the notebook only after
+   setting all three identifiers.
+
+The live database could not be inspected in this environment because the
+configured local `root` password was unavailable. The implementation therefore
+does not claim live row counts or notebook persistence; verify the catalog and
+apply the migration with the project's authorized database credentials.
+
 ## 1. Overview
 
 The `Question_Selection_Generation` folder is responsible for selecting technical interview questions for a candidate based on the skills extracted from a Job Description (JD).
@@ -10,7 +52,8 @@ The Question Bank already contains approximately **5,194 questions and answers**
 
 The current implementation focuses on **Stage 1: Question Bank Selection**.
 
-The generation of four additional questions using a local LLM is a later phase and is not part of the current execution workflow.
+The old local-LLM description below is historical and no longer applies; Stage 2
+now uses the Groq workflow described at the top of this document.
 
 ### Main objectives
 
@@ -1003,33 +1046,7 @@ Do not silently relabel questions to force the desired distribution.
 
 ---
 
-## 16. Git and Collaboration
-
-Before committing changes:
-
-```bash
-git status
-git diff
-```
-
-Review the changes to Python files, notebooks, SQL, and documentation.
-
-Do not commit passwords, `.env` files containing credentials, database dumps containing private candidate data, or unrelated local artifacts.
-
-Commit only the intended project files.
-
-Example:
-
-```bash
-git add Question_Selection_Generation/
-git commit -m "Fix idempotent Stage 1 question selection"
-```
-
-Coordinate schema changes with the collaborator so both local databases use compatible table structures and constraints.
-
----
-
-## 17. Current Scope and Future Work
+## 16. Current Scope and Future Work
 
 ### Current scope
 

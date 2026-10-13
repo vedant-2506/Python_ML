@@ -71,9 +71,9 @@ class QuestionSelectionTests(unittest.TestCase):
     def test_stage2_boundaries_and_invalid_score(self):
         from Question_Selection_Generation.question_selector import determine_stage2_difficulty
 
-        self.assertEqual(determine_stage2_difficulty(100), {"Hard": 4})
-        self.assertEqual(determine_stage2_difficulty(80), {"Hard": 2, "Easy": 2})
-        self.assertEqual(determine_stage2_difficulty(59), {"Easy": 4})
+        self.assertEqual(determine_stage2_difficulty(100), {"Easy": 0, "Medium": 3, "Hard": 1})
+        self.assertEqual(determine_stage2_difficulty(80), {"Easy": 2, "Medium": 2, "Hard": 0})
+        self.assertEqual(determine_stage2_difficulty(59), {"Easy": 3, "Medium": 1, "Hard": 0})
         with self.assertRaises(ValueError):
             determine_stage2_difficulty(101)
 
