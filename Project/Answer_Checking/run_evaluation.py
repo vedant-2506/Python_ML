@@ -61,28 +61,28 @@ def main() -> None:
     print(f"Review Required: {review_required}")
     print(f"Failed Evaluations: {failed}")
 
-    attempts = {
-        (str(record["attempt_id"]), record["jd_id"])
+    candidates = {
+        (record["candidate_id"], record["jd_id"])
         for record in records
-        if record.get("attempt_id") is not None
+        if record.get("candidate_id") is not None
     }
-    for attempt_id, jd_id in sorted(attempts):
+    for candidate_id, jd_id in sorted(candidates):
         try:
-            average = get_first_six_average(attempt_id, jd_id)
+            average = get_first_six_average(candidate_id, jd_id)
             if average is None:
                 print(
-                    f"First Six Average for JD {jd_id}, attempt {attempt_id}: "
+                    f"First Six Average for JD {jd_id}, candidate {candidate_id}: "
                     "not ready (requires six distinct scored Stage 1 answers)."
                 )
             else:
                 print(
-                    f"First Six Average for JD {jd_id}, attempt {attempt_id}: "
+                    f"First Six Average for JD {jd_id}, candidate {candidate_id}: "
                     f"{average} / 100 (provisional if any answer requires review)."
                 )
         except Exception as exc:
             print(
                 f"Could not calculate First Six Average for JD {jd_id}, "
-                f"attempt {attempt_id}: {exc}"
+                f"candidate {candidate_id}: {exc}"
             )
 
 

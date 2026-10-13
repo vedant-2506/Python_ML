@@ -53,6 +53,14 @@ class QuestionSelectionTests(unittest.TestCase):
         self.assertEqual(normalize_difficulty(" medium "), "Medium")
         self.assertEqual(normalize_question(" A  Question! "), "a question")
 
+    def test_validation_normalizes_lowercase_difficulty_and_handles_none_text(self):
+        questions = [
+            SelectedQuestion(i, "subject", "topic", f"question {i}", "answer", "concept", difficulty)
+            for i, difficulty in enumerate(["easy", "easy", "easy", "medium", "medium", "hard"], 1)
+        ]
+        self.assertEqual(validate_stage1_questions(questions), [])
+        self.assertEqual(normalize_question(None), "")
+
     def test_duplicate_text_is_rejected(self):
         questions = [
             SelectedQuestion(i, "subject", "topic", "question 1" if i == 2 else f"question {i}", "answer", "concept", difficulty)

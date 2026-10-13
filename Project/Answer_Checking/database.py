@@ -6,7 +6,6 @@ import json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-from uuid import UUID
 
 import psycopg2
 
@@ -60,7 +59,8 @@ def get_question_details(jd_id: int, question_id: int) -> Dict[str, Any]:
                        expected_concepts, difficulty, skill, exam_question_id
                 FROM public.question_exam
                 WHERE jd_id = %s AND question_id = %s AND stage = 1
-                ORDER BY exam_question_id
+                ORDER BY created_at DESC, exam_question_id DESC
+                LIMIT 1
                 """,
                 (jd_id, question_id),
             )
@@ -68,13 +68,6 @@ def get_question_details(jd_id: int, question_id: int) -> Dict[str, Any]:
 
         if not rows:
             raise ValueError(f"No question found for jd_id={jd_id} and question_id={question_id}.")
-
-        if len(rows) > 1:
-            candidates = [str(row[7]) for row in rows]
-            raise ValueError(
-                "Multiple matching question_exam rows found for this jd_id and question_id; "
-                f"choose a unique source row. Candidates: {', '.join(candidates)}"
-            )
 
         row = rows[0]
         return {
@@ -91,11 +84,47 @@ def get_question_details(jd_id: int, question_id: int) -> Dict[str, Any]:
         conn.close()
 
 
-def _normalize_attempt_id(attempt_id: UUID | str) -> UUID:
+def get_stage1_questions(jd_id: int) -> List[Dict[str, Any]]:
+    """Return the latest Stage 1 question set for a JD in question order."""
+
+    conn = get_database_connection()
     try:
-        return attempt_id if isinstance(attempt_id, UUID) else UUID(str(attempt_id))
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise ValueError("attempt_id must be a valid candidate-scoped UUID.") from exc
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT question_id, question, exam_question_id
+                FROM public.question_exam
+                WHERE jd_id = %s
+                  AND stage = 1
+                  AND exam_id = (
+                      SELECT exam_id
+                      FROM public.question_exam
+                      WHERE jd_id = %s AND stage = 1
+                      GROUP BY exam_id
+                      ORDER BY MAX(created_at) DESC, exam_id DESC
+                      LIMIT 1
+                  )
+                ORDER BY question_order
+                """,
+                (jd_id, jd_id),
+            )
+            rows = cursor.fetchall()
+
+        questions = [
+            {
+                "question_id": row[0],
+                "question": row[1],
+                "exam_question_id": row[2],
+            }
+            for row in rows
+        ]
+        if len(questions) != 6:
+            raise ValueError(
+                f"JD {jd_id} must have exactly 6 Stage 1 questions; found {len(questions)}."
+            )
+        return questions
+    finally:
+        conn.close()
 
 
 def calculate_first_six_average(
@@ -138,12 +167,11 @@ def calculate_first_six_average(
 
 
 def get_first_six_average(
-    attempt_id: UUID | str,
+    candidate_id: int,
     jd_id: int,
 ) -> Optional[Decimal]:
-    """Calculate one attempt's Stage 1 average without persisting it."""
+    """Calculate one candidate's Stage 1 average without persisting it."""
 
-    normalized_attempt_id = _normalize_attempt_id(attempt_id)
     conn = get_database_connection()
     try:
         with conn.cursor() as cursor:
@@ -156,11 +184,11 @@ def get_first_six_average(
                   ON qe.jd_id = ae.jd_id
                  AND qe.question_id = ae.question_id
                  AND qe.stage = 1
-                WHERE ae.attempt_id = %s::uuid
+                WHERE ae.candidate_id = %s
                   AND ae.jd_id = %s
                 ORDER BY ae.evaluation_id
                 """,
-                (str(normalized_attempt_id), jd_id),
+                (candidate_id, jd_id),
             )
             evaluations = cursor.fetchall()
         return calculate_first_six_average(evaluations)
@@ -172,11 +200,12 @@ def save_candidate_answer(
     jd_id: int,
     question_id: int,
     candidate_answer: Optional[str],
-    attempt_id: UUID | str,
+    candidate_id: int,
 ) -> int:
     """Insert a pending evaluation record into answer_evaluation."""
 
-    normalized_attempt_id = _normalize_attempt_id(attempt_id)
+    if isinstance(candidate_id, bool) or not isinstance(candidate_id, int) or candidate_id < 1:
+        raise ValueError("candidate_id must be a positive integer.")
     detail = get_question_details(jd_id, question_id)
     candidate_text = None if candidate_answer is None else str(candidate_answer)
 
@@ -189,14 +218,14 @@ def save_candidate_answer(
                 """
                 SELECT evaluation_id
                 FROM public.answer_evaluation
-                WHERE attempt_id = %s::uuid
+                WHERE candidate_id = %s
                   AND jd_id = %s
                   AND question_id = %s
                   AND candidate_answer IS NOT DISTINCT FROM %s
                   AND evaluation_status = 'Pending'
                 LIMIT 1
                 """,
-                (str(normalized_attempt_id), jd_id, question_id, candidate_text),
+                (candidate_id, jd_id, question_id, candidate_text),
             )
             existing = cursor.fetchone()
             if existing:
@@ -213,7 +242,7 @@ def save_candidate_answer(
             cursor.execute(
                 """
                 INSERT INTO public.answer_evaluation (
-                    attempt_id,
+                    candidate_id,
                     jd_id,
                     question_id,
                     expected_answer,
@@ -225,11 +254,11 @@ def save_candidate_answer(
                     evaluation_notes,
                     evaluated_at
                 )
-                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING evaluation_id
                 """,
                 (
-                    str(normalized_attempt_id),
+                    candidate_id,
                     jd_id,
                     question_id,
                     detail.get("expected_answer"),

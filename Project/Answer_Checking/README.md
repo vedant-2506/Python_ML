@@ -46,7 +46,7 @@ Answer_Checking/
 
 - `config.py`: reads database and model configuration from environment variables.
 - `database.py`: handles PostgreSQL connections, validation, answer insertion, and updates.
-- `manual_answer_input.py`: asks the user for JD ID, question ID, and multiline candidate answer.
+- `manual_answer_input.py`: asks the user for JD ID and candidate ID, then collects answers to the six Stage 1 questions in order.
 - `claim_extractor.py`: splits candidate writing into smaller claim-like units.
 - `semantic_similarity.py`: embeds expected and candidate answers and computes similarity.
 - `factual_correctness.py`: compares claims to verified facts using an NLI-style comparison.
@@ -124,7 +124,7 @@ Example structure:
 ```sql
 CREATE TABLE IF NOT EXISTS public.answer_evaluation (
     evaluation_id BIGSERIAL PRIMARY KEY,
-    attempt_id UUID,
+    candidate_id INTEGER,
     jd_id BIGINT NOT NULL,
     question_id BIGINT NOT NULL,
     expected_answer TEXT,
@@ -143,10 +143,10 @@ CREATE TABLE IF NOT EXISTS public.answer_evaluation (
 );
 ```
 
-The module adds `attempt_id` to an existing table without replacing existing
-evaluation rows. The schema script removes the obsolete `first_six_average`
-column if present. Existing evaluation rows without an attempt ID cannot be
-grouped retroactively because the previous schema did not record an attempt.
+The schema script adds `candidate_id` to an existing table without replacing
+evaluation rows. It drops any previous `attempt_id` or `legacy_attempt_id`
+column; historical attempt identifiers are not retained. The schema script
+also removes the obsolete `first_six_average` column if present.
 
 Status values include:
 
@@ -159,10 +159,10 @@ Status values include:
 
 A candidate answer is stored in `answer_evaluation`, not in `question_exam`.
 
-When the user submits a candidate answer, the module:
+When the user submits candidate answers, the module:
 
-- requires a candidate-scoped UUID `attempt_id`, shared by all answers in that
-  candidate's test attempt and never reused for another candidate or attempt,
+- stores a positive integer `candidate_id` (for example, 1, 2, or 3) with all
+  six answers,
 - validates that `jd_id` and `question_id` belong to an existing `question_exam` row,
 - retrieves the expected answer and metadata,
 - saves the candidate answer,
@@ -174,27 +174,19 @@ When the user submits a candidate answer, the module:
 From the project root, run:
 
 ```bash
-python Answer_Checking\manual_answer_input.py
+python -m Answer_Checking.manual_answer_input
 ```
 
 The terminal asks for:
 
 - JD ID
-- Question ID
-- candidate-scoped attempt UUID
-- Candidate answer
+- Candidate ID
+- Each of the six Stage 1 questions in database order, followed by its answer
 
-The answer may be multiline. Finish the input with:
+Answers may be multiline. Type `done` on a separate line after each answer, then
+type `finish` after the sixth answer to complete the submission.
 
-```text
-END_ANSWER
-```
-
-The script saves the answer into `answer_evaluation` with status `Pending`.
-Enter the same attempt UUID when submitting each of the six Stage 1 answers.
-The submission caller is responsible for issuing a fresh UUID for every
-candidate's attempt; the current project schema has no candidate-linked attempt
-table against which an arbitrary UUID could be verified.
+Each answer is saved into `answer_evaluation` with status `Pending`.
 
 ## 10. Evaluating saved answers
 
@@ -396,9 +388,9 @@ ELSE:
 The per-answer score above remains unchanged. The first-six average is
 calculated on demand when `run_evaluation` processes answers. It is available
 only when the latest evaluation for each of six distinct Stage 1 questions in
-the same `(attempt_id, jd_id)` is either `Completed` or `Review Required` with a
-finite score from 0 to 100. Review Required scores are included so the attempt
-can display a provisional average; their review status is preserved, and that
+the same `(candidate_id, jd_id)` is either `Completed` or `Review Required` with a
+finite score from 0 to 100. Review Required scores are included in a provisional
+candidate average; their review status is preserved, and that
 average is not evidence that their scores have been manually approved. Pending
 or Failed latest evaluations prevent an average.
 Duplicate submissions contribute at most one score per question; the latest
@@ -406,7 +398,7 @@ evaluation ID is authoritative.
 An explicitly submitted empty answer contributes its evaluated zero, while an
 unanswered question contributes nothing. A null candidate-answer value is not
 treated as an explicit empty submission and prevents aggregation for that
-attempt.
+candidate.
 
 The average is printed by the evaluation command, not stored in
 `answer_evaluation`. No `question_exam` schema changes are made.
@@ -423,7 +415,7 @@ final_score = 0.60 * A6 + 0.40 * A4
 ```
 
 The final score remains on a 0–100 scale. A future summary may store the
-attempt identifier, JD ID, both averages, final score, and completion status;
+candidate ID, JD ID, both averages, final score, and completion status;
 that summary is deferred until the Stage 2 schema is defined.
 
 ## 14. Marks calculation
@@ -467,12 +459,14 @@ Example manual input:
 
 ```text
 Enter JD ID: 1
-Enter Question ID: 5
-Enter candidate-scoped attempt ID (reuse this UUID for all six answers in the attempt): <uuid>
+Enter Candidate ID: 7
+Question 1: What is overfitting?
 Enter Candidate Answer:
-(Type END_ANSWER on a separate line to finish)
+(Type done on a separate line when this answer is complete)
 Overfitting occurs when a model memorizes training data.
-END_ANSWER
+done
+...
+Type finish to complete submission: finish
 ```
 
 Example saved evaluation result:

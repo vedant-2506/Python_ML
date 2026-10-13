@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 from decimal import Decimal
-from uuid import UUID
 from unittest.mock import patch
 
 from Answer_Checking.database import (
     calculate_first_six_average,
     get_first_six_average,
+    get_stage1_questions,
     save_candidate_answer,
 )
 
@@ -74,18 +74,15 @@ class TestDatabase(unittest.TestCase):
             1,
             5,
             "Overfitting is memorization.",
-            "bb0e8400-e29b-41d4-a716-446655440000",
+            7,
         )
 
         self.assertEqual(evaluation_id, 7)
         duplicate_query = mock_connect.return_value.cursor_obj.executed[1]
-        self.assertIn("WHERE attempt_id = %s", duplicate_query[0])
-        self.assertEqual(
-            duplicate_query[1][0],
-            "bb0e8400-e29b-41d4-a716-446655440000",
-        )
+        self.assertIn("WHERE candidate_id = %s", duplicate_query[0])
+        self.assertEqual(duplicate_query[1][0], 7)
         insert_parameters = mock_connect.return_value.cursor_obj.executed[-1][1]
-        self.assertEqual(insert_parameters[0], "bb0e8400-e29b-41d4-a716-446655440000")
+        self.assertEqual(insert_parameters[0], 7)
         self.assertEqual(insert_parameters[6], 12.0)
 
     @patch("Answer_Checking.database.get_question_details", side_effect=ValueError("not found"))
@@ -95,8 +92,39 @@ class TestDatabase(unittest.TestCase):
                 999,
                 999,
                 "candidate answer",
-                "bb0e8400-e29b-41d4-a716-446655440000",
+                7,
             )
+
+    def test_save_candidate_answer_rejects_non_positive_candidate_id(self):
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            save_candidate_answer(1, 5, "candidate answer", 0)
+
+    @patch("Answer_Checking.database.get_database_connection")
+    def test_get_stage1_questions_returns_ordered_questions(self, mock_connect):
+        connection = FakeConnection()
+        connection.cursor_obj.fetchall_result = [
+            (question_id, f"Question {question_id}", question_id + 100)
+            for question_id in range(1, 7)
+        ]
+        mock_connect.return_value = connection
+
+        questions = get_stage1_questions(1)
+
+        self.assertEqual(
+            [question["question_id"] for question in questions],
+            [1, 2, 3, 4, 5, 6],
+        )
+        self.assertIn("ORDER BY question_order", connection.cursor_obj.executed[0][0])
+        self.assertEqual(connection.cursor_obj.executed[0][1], (1, 1))
+
+    @patch("Answer_Checking.database.get_database_connection")
+    def test_get_stage1_questions_requires_six_questions(self, mock_connect):
+        connection = FakeConnection()
+        connection.cursor_obj.fetchall_result = [(1, "Question 1", 101)]
+        mock_connect.return_value = connection
+
+        with self.assertRaisesRegex(ValueError, "exactly 6 Stage 1 questions"):
+            get_stage1_questions(1)
 
     @patch("Answer_Checking.database.get_database_connection")
     def test_result_update_refuses_non_pending_record(self, mock_connect):
@@ -170,25 +198,22 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(calculate_first_six_average(evaluations), 80)
 
     @patch("Answer_Checking.database.get_database_connection")
-    def test_different_attempts_are_not_combined(self, mock_connect):
-        attempt_ids = [
-            UUID("bb0e8400-e29b-41d4-a716-446655440000"),
-            UUID("bb0e8400-e29b-41d4-a716-446655440001"),
-        ]
+    def test_different_candidates_are_not_combined(self, mock_connect):
+        candidate_ids = [7, 8]
         attempt_questions = [
             (evaluation_id, question_id, 80, "Completed", "answer")
             for evaluation_id, question_id in enumerate(range(1, 4), start=1)
         ]
 
-        for attempt_id in attempt_ids:
+        for candidate_id in candidate_ids:
             connection = FakeConnection()
             connection.cursor_obj.fetchall_result = attempt_questions
             mock_connect.return_value = connection
 
-            self.assertIsNone(get_first_six_average(attempt_id, 1))
+            self.assertIsNone(get_first_six_average(candidate_id, 1))
             question_query = connection.cursor_obj.executed[0]
-            self.assertIn("WHERE ae.attempt_id = %s", question_query[0])
-            self.assertEqual(question_query[1], (str(attempt_id), 1))
+            self.assertIn("WHERE ae.candidate_id = %s", question_query[0])
+            self.assertEqual(question_query[1], (candidate_id, 1))
 
     @patch("Answer_Checking.database.get_database_connection")
     def test_average_for_complete_attempt_is_calculated_on_demand(self, mock_connect):
@@ -199,10 +224,7 @@ class TestDatabase(unittest.TestCase):
         ]
         mock_connect.return_value = connection
 
-        average = get_first_six_average(
-            "bb0e8400-e29b-41d4-a716-446655440000",
-            1,
-        )
+        average = get_first_six_average(7, 1)
 
         self.assertEqual(average, 80)
         self.assertIn("qe.stage = 1", connection.cursor_obj.executed[0][0])

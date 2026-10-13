@@ -234,11 +234,13 @@ def _query_for_subjects(connection, subjects: list[str], difficulty: str) -> lis
         return cursor.fetchall()
 
 
-def normalize_question(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+#./ -]", " ", text.casefold())).strip()
+def normalize_question(text: Any) -> str:
+    if text is None:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+#./ -]", " ", str(text).casefold())).strip()
 
 
-def question_hash(text: str) -> str:
+def question_hash(text: Any) -> str:
     return hashlib.sha256(normalize_question(text).encode()).hexdigest()
 
 
@@ -282,24 +284,40 @@ def select_stage1_questions(
 
 def validate_stage1_questions(questions: list[SelectedQuestion]) -> list[str]:
     errors: list[str] = []
+    if questions is None:
+        return ["no questions provided"]
     if len(questions) != 6:
         errors.append(f"expected 6 questions, received {len(questions)}")
-    if len({item.question_id for item in questions}) != len(questions):
-        errors.append("duplicate Question Bank IDs")
-    fingerprints = [normalize_question(item.question) for item in questions]
-    if len(set(fingerprints)) != len(fingerprints):
-        errors.append("duplicate question text")
-    counts = {difficulty: sum(item.difficulty == difficulty for item in questions) for difficulty in ("Easy", "Medium", "Hard")}
-    if counts != {"Easy": 3, "Medium": 2, "Hard": 1}:
-        errors.append(f"invalid difficulty distribution: {counts}")
+    question_ids: list[int] = []
+    fingerprints: list[str] = []
+    normalized_counts = {"Easy": 0, "Medium": 0, "Hard": 0}
     for item in questions:
+        if item is None:
+            errors.append("question entry is missing")
+            continue
+        question_ids.append(item.question_id)
+        fingerprints.append(normalize_question(item.question))
+        try:
+            normalized_difficulty = normalize_difficulty(item.difficulty)
+        except (TypeError, ValueError):
+            normalized_difficulty = ""
+        if normalized_difficulty in normalized_counts:
+            normalized_counts[normalized_difficulty] += 1
+        elif item.difficulty not in (None, ""):
+            errors.append(f"unsupported difficulty label for question {item.question_id}: {item.difficulty!r}")
         if (
             not str(item.question_id).strip()
-            or not item.question.strip()
-            or not item.answer.strip()
-            or not item.expected_concepts.strip()
+            or not str(item.question or "").strip()
+            or not str(item.answer or "").strip()
+            or not str(item.expected_concepts or "").strip()
         ):
             errors.append(f"empty field for question {item.question_id}")
+    if len(set(question_ids)) != len(question_ids):
+        errors.append("duplicate Question Bank IDs")
+    if len(set(fingerprints)) != len(fingerprints):
+        errors.append("duplicate question text")
+    if normalized_counts != {"Easy": 3, "Medium": 2, "Hard": 1}:
+        errors.append(f"invalid difficulty distribution: {normalized_counts}")
     return errors
 
 
