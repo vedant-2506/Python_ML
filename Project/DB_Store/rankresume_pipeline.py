@@ -297,7 +297,11 @@ def find_esco_skills_csv(search_root: Path | None = None) -> Path:
             continue
         with candidate.open("r", encoding="utf-8-sig", errors="strict", newline="") as stream:
             sample = stream.read(8192)
-            dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|")
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",\t;|")
+            except csv.Error as error:
+                LOGGER.debug("Skipping CSV candidate with undetectable delimiter %s: %s", candidate, error)
+                continue
             header = set(next(csv.reader([sample.splitlines()[0]], dialect)))
         if ESCO_REQUIRED_COLUMNS.issubset(header):
             return candidate
