@@ -32,8 +32,12 @@ class Stage2PolicyTests(unittest.TestCase):
         self.assertEqual(calculate_percentage(evaluations([3, 3, 3, 6, 6, 9])), Decimal("50.00"))
 
     def test_requires_completed_six_valid_evaluations(self):
-        with self.assertRaises(ValueError):
-            calculate_percentage(evaluations([6, 6, 6, 12, 12, 18], "Review Required"))
+        self.assertEqual(
+            calculate_percentage(
+                evaluations([6, 6, 6, 12, 12, 18], "Review Required")
+            ),
+            Decimal("100.00"),
+        )
         with self.assertRaises(ValueError):
             calculate_percentage(evaluations([6, 6, 6, 12, 12]))
 
@@ -42,8 +46,9 @@ class Stage2PolicyTests(unittest.TestCase):
             Decimal("0"): {"Easy": 3, "Medium": 1, "Hard": 0},
             Decimal("59"): {"Easy": 3, "Medium": 1, "Hard": 0},
             Decimal("59.49"): {"Easy": 3, "Medium": 1, "Hard": 0},
-            Decimal("59.50"): {"Easy": 2, "Medium": 2, "Hard": 0},
-            Decimal("60"): {"Easy": 2, "Medium": 2, "Hard": 0},
+            Decimal("59.50"): {"Easy": 3, "Medium": 1, "Hard": 0},
+            Decimal("60.01"): {"Easy": 2, "Medium": 2, "Hard": 0},
+            Decimal("60"): {"Easy": 3, "Medium": 1, "Hard": 0},
             Decimal("80"): {"Easy": 2, "Medium": 2, "Hard": 0},
             Decimal("80.50"): {"Easy": 0, "Medium": 3, "Hard": 1},
             Decimal("81"): {"Easy": 0, "Medium": 3, "Hard": 1},

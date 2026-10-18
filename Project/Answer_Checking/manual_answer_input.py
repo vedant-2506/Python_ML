@@ -175,11 +175,31 @@ def main() -> None:
             print("Please type finish to complete submission.")
 
         print("\nStage 1 answers saved successfully.")
+        print("Evaluating initial answers...")
+        _evaluate_pending(exam_id, candidate_id, jd_id)
+        evaluated_stage1 = get_exam_evaluation_rows(exam_id, candidate_id, jd_id)
+        completed_stage1 = [
+            row for row in evaluated_stage1
+            if row["evaluation_status"] in {"Completed", "Review Required"}
+            and row["question_id"] in stage1_ids
+        ]
+        if len(completed_stage1) != 6:
+            raise Stage2StateError(
+                "initial assessment did not produce six eligible evaluation records"
+            )
         print("Generating four additional questions using the LLM...")
         summary = generate_or_reuse_stage2(exam_id, jd_id, candidate_id)
         _collect_stage2(jd_id, candidate_id, exam_id, summary["questions"])
+        print("Evaluating adaptive answers...")
+        _evaluate_pending(exam_id, candidate_id, jd_id)
         _verify_completed_exam(exam_id, candidate_id, jd_id)
-        print("\nAll ten questions and candidate responses have been saved.")
+        print("\nEXAM SUBMISSION SUMMARY")
+        print("-----------------------")
+        print("Initial questions: 6")
+        print("Adaptive questions: 4")
+        print("Total paper questions: 10")
+        print("Candidate answers saved: 10")
+        print("All ten questions and candidate responses have been saved.")
     except (ValueError, Stage2StateError) as exc:
         print(f"Exam stopped safely: {exc}")
     except Exception as exc:

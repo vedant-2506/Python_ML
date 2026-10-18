@@ -21,15 +21,20 @@ class TestAdaptivePolicyResolution(unittest.TestCase):
         self.assertIsNone(pct)
         self.assertFalse(is_adapt)
 
-    def test_resolve_default_when_pending_or_review_required(self):
+    def test_resolve_provisional_adaptive_distribution_for_review_required(self):
         evals = [
-            {"evaluation_id": i, "question_order": i, "difficulty": d, "obtained_marks": 5, "max_marks": m, "evaluation_status": "Review Required"}
-            for i, (d, m) in enumerate([("Easy", 6), ("Easy", 6), ("Easy", 6), ("Medium", 12), ("Medium", 12), ("Hard", 18)], 1)
+            {"evaluation_id": i, "question_order": i, "difficulty": d,
+             "obtained_marks": 5, "max_marks": m,
+             "evaluation_status": "Review Required"}
+            for i, (d, m) in enumerate([
+                ("Easy", 6), ("Easy", 6), ("Easy", 6),
+                ("Medium", 12), ("Medium", 12), ("Hard", 18)
+            ], 1)
         ]
         dist, pct, is_adapt = resolve_stage2_difficulty(evals)
-        self.assertEqual(dist, {"Easy": 2, "Medium": 2, "Hard": 0})
-        self.assertIsNone(pct)
-        self.assertFalse(is_adapt)
+        self.assertEqual(pct, Decimal("50.00"))
+        self.assertEqual(dist, {"Easy": 3, "Medium": 1, "Hard": 0})
+        self.assertTrue(is_adapt)
 
     def test_resolve_adaptive_when_all_completed(self):
         evals = [
@@ -69,8 +74,9 @@ class TestCompleteWorkflow(unittest.TestCase):
         ]
         mock_eval_rows.side_effect = [
             [],  # initial check (no answers saved yet)
-            [],  # stage 2 check (no stage 2 answers saved yet)
-            [{"evaluation_id": i, "question_id": i, "evaluation_status": "Pending"} for i in range(1, 11)],  # verify check
+            [{"evaluation_id": i, "question_id": i, "evaluation_status": "Completed"} for i in range(1, 7)],
+            [{"evaluation_id": i, "question_id": i, "evaluation_status": "Completed"} for i in range(1, 7)],
+            [{"evaluation_id": i, "question_id": i, "evaluation_status": "Completed"} for i in range(1, 11)],
         ]
         mock_stage2.return_value = {
             "reused": False,
@@ -113,8 +119,9 @@ class TestCompleteWorkflow(unittest.TestCase):
 
         buffer = io.StringIO()
         with patch("builtins.input", side_effect=inputs):
-            with redirect_stdout(buffer):
-                main()
+            with patch("Answer_Checking.manual_answer_input._evaluate_pending"):
+                with redirect_stdout(buffer):
+                    main()
 
         output = buffer.getvalue()
         self.assertIn("RANKRESUME EXAM", output)
@@ -159,13 +166,13 @@ class TestCompleteWorkflow(unittest.TestCase):
         ]
         # Candidate already answered questions 1 to 6
         existing_stage1 = [
-            {"evaluation_id": i, "question_id": i, "evaluation_status": "Review Required"}
+            {"evaluation_id": i, "question_id": i, "evaluation_status": "Completed"}
             for i in range(1, 7)
         ]
         mock_eval_rows.side_effect = [
             existing_stage1,  # initial check
-            existing_stage1,  # stage 2 check
-            existing_stage1 + [{"evaluation_id": 100+i, "question_id": 100+i, "evaluation_status": "Pending"} for i in range(1, 5)],
+            existing_stage1,  # after initial evaluation and before Stage 2 collection
+            existing_stage1,  # Stage 2 collection
         ]
         mock_stage2.return_value = {
             "reused": True,
@@ -200,8 +207,9 @@ class TestCompleteWorkflow(unittest.TestCase):
 
         buffer = io.StringIO()
         with patch("builtins.input", side_effect=inputs):
-            with redirect_stdout(buffer):
-                main()
+            with patch("Answer_Checking.manual_answer_input._evaluate_pending"):
+                with redirect_stdout(buffer):
+                    main()
 
         output = buffer.getvalue()
         # Stage 1 questions should NOT be asked again!

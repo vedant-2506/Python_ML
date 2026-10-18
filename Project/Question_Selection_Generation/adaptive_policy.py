@@ -10,7 +10,7 @@ DIFFICULTY_MARKS = {"Easy": Decimal("6"), "Medium": Decimal("12"), "Hard": Decim
 
 
 def calculate_percentage(evaluations: Iterable[dict[str, Any]]) -> Decimal:
-    """Validate six completed evaluations and calculate the percentage out of 60."""
+    """Calculate a provisional percentage from six valid scored evaluations."""
     rows = list(evaluations)
     if len(rows) != 6:
         raise ValueError(f"exactly six Stage 1 evaluations are required; found {len(rows)}")
@@ -22,7 +22,7 @@ def calculate_percentage(evaluations: Iterable[dict[str, Any]]) -> Decimal:
     total_max = Decimal("0")
     obtained = Decimal("0")
     for row in ordered:
-        if row.get("evaluation_status") != "Completed":
+        if row.get("evaluation_status") not in {"Completed", "Review Required"}:
             raise ValueError(
                 f"Stage 1 evaluation {row.get('evaluation_id', '')} is "
                 f"{row.get('evaluation_status')!r}; only Completed results are eligible"
