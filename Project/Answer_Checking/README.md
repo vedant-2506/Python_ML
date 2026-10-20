@@ -29,13 +29,16 @@ Answer_Checking/
 ├── factual_correctness.py
 ├── answer_evaluator.py
 ├── run_evaluation.py
+├── final_result.py
 ├── requirements.txt
 ├── README.md
 ├── sql/
-│   └── create_answer_evaluation.sql
+│   ├── create_answer_evaluation.sql
+│   └── create_final_evaluation_result.sql
 └── tests/
     ├── __init__.py
     ├── test_database.py
+    ├── test_final_result.py
     ├── test_manual_answer_input.py
     ├── test_semantic_similarity.py
     ├── test_factual_correctness.py
@@ -52,7 +55,8 @@ Answer_Checking/
 - `factual_correctness.py`: compares claims to verified facts using an NLI-style comparison.
 - `answer_evaluator.py`: calculates final scores, classification, and marks.
 - `run_evaluation.py`: evaluates pending records and prints an execution summary.
-- `sql/create_answer_evaluation.sql`: creates the evaluation table without dropping data.
+- `sql/create_answer_evaluation.sql`: creates the answer evaluation table without dropping data.
+- `sql/create_final_evaluation_result.sql`: creates the final exam summary table without dropping data.
 - `tests/`: unit tests for the module.
 
 ## 4. Required libraries
@@ -403,10 +407,11 @@ candidate.
 The average is printed by the evaluation command, not stored in
 `answer_evaluation`. No `question_exam` schema changes are made.
 
-### Future final score
+### Final exam score
 
 The separate Stage 2 evaluation module and its table are intentionally not
-created here. Once that schema is available, the intended final score is:
+used for the final score. After all ten answers are evaluated, the exam workflow
+calculates:
 
 ```text
 A6 = SUM(first six answer scores) / 6
@@ -414,9 +419,16 @@ A4 = SUM(last four answer scores) / 4
 final_score = 0.60 * A6 + 0.40 * A4
 ```
 
-The final score remains on a 0–100 scale. A future summary may store the
-candidate ID, JD ID, both averages, final score, and completion status;
-that summary is deferred until the Stage 2 schema is defined.
+The final score remains on a 0–100 scale. The workflow creates
+`public.final_evaluation_result` if needed and upserts the candidate ID, JD ID,
+both averages, final score, completion status, and calculation time. Its schema
+is defined in `sql/create_final_evaluation_result.sql`.
+
+The normal exam workflow calculates this result automatically when an exam is
+completed. To calculate it manually, run
+`python -m Answer_Checking.final_result` and enter the exam UUID, candidate ID,
+and job-description ID when prompted. These values can also be passed as
+positional arguments.
 
 ## 14. Marks calculation
 

@@ -224,7 +224,7 @@ def _query_for_subjects(connection, subjects: list[str], difficulty: str) -> lis
         cursor.execute(
             """SELECT question_id, subject, topic, question, answer,
                       expected_concepts, difficulty
-               FROM bankresume
+               FROM question_bank
                WHERE LOWER(TRIM(difficulty)) = %s
                  AND (LOWER(TRIM(subject)) = ANY(%s)
                       OR LOWER(TRIM(topic)) = ANY(%s))

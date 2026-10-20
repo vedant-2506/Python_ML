@@ -75,7 +75,7 @@ def _stage1_rows(connection, exam_id: uuid.UUID) -> list[SelectedQuestion]:
                       COALESCE(b.topic, ''), q.question, q.reference_answer,
                       q.expected_concepts, q.difficulty
                FROM question_exam q
-               LEFT JOIN bankresume b ON b.question_id = q.question_id
+               LEFT JOIN question_bank b ON b.question_id = q.question_id
                WHERE q.exam_id = %s AND q.stage = 1
                ORDER BY q.question_order""",
             (str(exam_id),),
@@ -103,9 +103,8 @@ def _has_submitted_answers(connection, exam_id: uuid.UUID) -> bool:
     with connection.cursor() as cursor:
         cursor.execute(
             """SELECT EXISTS (
-                 SELECT 1 FROM answer_store a
-                 JOIN question_exam q ON q.exam_question_id = a.exam_question_id
-                 WHERE q.exam_id = %s AND q.stage = 1
+                 SELECT 1 FROM public.answer_evaluation ae
+                 WHERE ae.exam_id = %s AND ae.evaluation_status <> 'Superseded'
                )""",
             (str(exam_id),),
         )
@@ -151,26 +150,28 @@ def _insert_stage1_rows(connection, exam_id: uuid.UUID, jd_id: int, questions: l
                 ),
             )
         cursor.execute(
-            "UPDATE exam_sessions SET status = 'STAGE1_SUBMITTED' WHERE exam_id = %s",
+            "UPDATE exam_sessions SET status = 'STAGE1_READY' WHERE exam_id = %s AND status = 'STAGE1_READY'",
             (str(exam_id),),
         )
 
 
-def select_questions(connection, jd_id: int, refresh: bool = False, rng=None) -> Stage1Selection:
+def select_questions(
+    connection, jd_id: int, refresh: bool = False, rng=None, exam_id: uuid.UUID | str | None = None
+) -> Stage1Selection:
     """Reuse or transactionally create exactly one valid Stage 1 set for a JD."""
     _lock_jd(connection, jd_id)
     jd = _fetch_jd(connection, jd_id)
     classification = classify_skills(jd.get("expected_skills", []), load_project_vocabulary(connection))
-    exam_id = _get_or_create_exam(connection, jd_id)
-    existing = _stage1_rows(connection, exam_id)
+    resolved_exam_id = uuid.UUID(str(exam_id)) if exam_id else _get_or_create_exam(connection, jd_id)
+    existing = _stage1_rows(connection, resolved_exam_id)
     existing_errors = validate_stage1_questions(existing)
     if existing and not existing_errors and not refresh:
-        return Stage1Selection(exam_id, jd_id, existing, classification, True)
+        return Stage1Selection(resolved_exam_id, jd_id, existing, classification, True)
     if refresh or existing:
-        _delete_stage1_rows_for_refresh(connection, exam_id)
+        _delete_stage1_rows_for_refresh(connection, resolved_exam_id)
     questions = select_stage1_questions(connection, classification.core_skills, rng=rng)
-    _insert_stage1_rows(connection, exam_id, jd_id, questions)
-    return Stage1Selection(exam_id, jd_id, questions, classification, False)
+    _insert_stage1_rows(connection, resolved_exam_id, jd_id, questions)
+    return Stage1Selection(resolved_exam_id, jd_id, questions, classification, False)
 
 
 def create_exam(connection, jd_id: int, rng=None) -> tuple[uuid.UUID, dict[str, Any]]:

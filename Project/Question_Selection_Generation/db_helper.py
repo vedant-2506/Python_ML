@@ -49,5 +49,5 @@ def fetch_jd(connection, jd_id: int) -> dict:
 
 def count_question_bank(connection) -> int:
     with connection.cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) FROM bankresume")
+        cursor.execute("SELECT COUNT(*) FROM question_bank")
         return cursor.fetchone()[0]

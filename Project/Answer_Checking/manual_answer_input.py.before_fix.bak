@@ -1,0 +1,121 @@
+
+    
+  
+        print("Preparing exam session...")
+        _validate_jd_and_candidate(jd_id, candidate_id)
+        _ensure_exam_schema()
+        exam_id, questions = _load_or_create_exam(jd_id, candidate_id, args.exam_id)
+    except (ValueError, Stage2StateError) as exc:
+        print(f"Could not load a safe exam attempt: {exc}")
+        return
+    except Exception as exc:
+        print(f"Database error while loading the exam: {exc}")
+        return
+
+    try:
+        print("\n========================================")
+        print("STAGE 1: INITIAL ASSESSMENT")
+        print("========================================")
+
+        existing_rows = get_exam_evaluation_rows(exam_id, candidate_id, jd_id)
+        stage1_ids = {int(q["question_id"]) for q in questions}
+        stage1_answers = [
+            r for r in existing_rows
+            if r["question_id"] in stage1_ids
+            and r.get("question_source") in ("Question Bank", None)
+            and r["evaluation_status"] != "Superseded"
+        ]
+
+        if len(stage1_answers) < len(questions):
+            _collect_stage1(jd_id, candidate_id, exam_id, questions, stage1_answers)
+
+        while input("\nType finish to complete submission: ").strip().lower() != "finish":
+            print("Please type finish to complete submission.")
+
+        try:
+            update_exam_session_status(exam_id, "STAGE1_SUBMITTED")
+        except Exception:
+            pass
+
+        print("\nStage 1 answers saved: 6/6")
+        print("Stage 1 answers saved successfully.")
+        print("Evaluating initial answers...")
+        _evaluate_pending(exam_id, candidate_id, jd_id)
+        evaluated_stage1 = get_exam_evaluation_rows(exam_id, candidate_id, jd_id)
+        completed_stage1 = [
+            row for row in evaluated_stage1
+            if row["evaluation_status"] in {"Completed", "Review Required"}
+            and row["question_id"] in stage1_ids
+            and row.get("question_source") in ("Question Bank", None)
+        ]
+        if len(completed_stage1) != 6:
+            raise Stage2StateError(
+                "initial assessment did not produce six eligible evaluation records"
+            )
+
+        print("\nStage 1 evaluation complete.")
+        print("Generating four additional questions using the LLM...")
+        print("Generating four additional questions using Groq...")
+        summary = generate_or_reuse_stage2(exam_id, jd_id, candidate_id)
+        pct = summary.get("percentage")
+        dist = summary.get("distribution")
+        if pct is not None:
+            print(f"Stage 1 average: {pct}%")
+        if dist:
+            print(f"Adaptive difficulty distribution: {dist}")
+
+        try:
+            update_exam_session_status(exam_id, "STAGE2_READY")
+        except Exception:
+            pass
+
+        _collect_stage2(jd_id, candidate_id, exam_id, summary["questions"])
+        print("\nEvaluating adaptive answers...")
+        _evaluate_pending(exam_id, candidate_id, jd_id)
+        _verify_completed_exam(exam_id, candidate_id, jd_id)
+
+        try:
+            update_exam_session_status(exam_id, "COMPLETED")
+        except Exception:
+            pass
+
+        current_status = None
+        try:
+            current_status = get_exam_session_status(exam_id)
+        except Exception:
+            pass
+        if current_status is None:
+            current_status = "COMPLETED"
+
+        print("\n========================================")
+        print("EXAM SUBMISSION SUMMARY")
+        print("========================================")
+        print(f"Job Description ID: {jd_id}")
+        print(f"Candidate ID: {candidate_id}")
+        print(f"Exam ID: {exam_id}")
+        print()
+        print("Initial questions: 6")
+        print("Adaptive questions: 4")
+        print("Total questions: 10")
+        print("Total paper questions: 10")
+        print("Candidate answers saved: 10")
+        print("Stage 1 evaluations: 6")
+        print("Stage 2 evaluations: 4")
+        print()
+        if current_status == "COMPLETED":
+            print("Exam status: COMPLETED")
+            print()
+            print("All ten questions and candidate responses")
+            print("have been saved and verified successfully.")
+            print("All ten questions and candidate responses have been saved.")
+        else:
+            print(f"Exam status: {current_status or 'INCOMPLETE'}")
+    except (ValueError, Stage2StateError) as exc:
+        print(f"Exam stopped safely: {exc}")
+    except Exception as exc:
+        print(f"Exam failed safely: {exc}")
+
+
+if __name__ == "__main__":
+    main()
+

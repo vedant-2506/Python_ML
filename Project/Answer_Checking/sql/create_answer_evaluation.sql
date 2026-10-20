@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS public.answer_evaluation (
     obtained_marks NUMERIC(10, 2),
     evaluation_status VARCHAR(30) NOT NULL DEFAULT 'Pending',
     evaluation_notes TEXT,
-    evaluated_at TIMESTAMPTZ DEFAULT NOW()
+    evaluated_at TIMESTAMPTZ DEFAULT NOW(),
+    question_source VARCHAR(50)
 );
 
 ALTER TABLE public.answer_evaluation
@@ -24,6 +25,9 @@ ALTER TABLE public.answer_evaluation
 
 ALTER TABLE public.answer_evaluation
     ADD COLUMN IF NOT EXISTS exam_id UUID;
+
+ALTER TABLE public.answer_evaluation
+    ADD COLUMN IF NOT EXISTS question_source VARCHAR(50);
 
 ALTER TABLE public.answer_evaluation
     DROP COLUMN IF EXISTS attempt_id,

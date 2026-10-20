@@ -37,29 +37,29 @@ def _near_count(values: list[str], threshold: float = 0.86) -> int:
 def audit() -> dict:
     with transaction() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM bankresume")
+            cursor.execute("SELECT COUNT(*) FROM question_bank")
             total = cursor.fetchone()[0]
-            cursor.execute("SELECT subject, COUNT(*) FROM bankresume GROUP BY subject ORDER BY subject")
+            cursor.execute("SELECT subject, COUNT(*) FROM question_bank GROUP BY subject ORDER BY subject")
             subjects = dict(cursor.fetchall())
-            cursor.execute("SELECT topic, COUNT(*) FROM bankresume GROUP BY topic ORDER BY topic")
+            cursor.execute("SELECT topic, COUNT(*) FROM question_bank GROUP BY topic ORDER BY topic")
             topics = dict(cursor.fetchall())
-            cursor.execute("SELECT difficulty, COUNT(*) FROM bankresume GROUP BY difficulty ORDER BY difficulty")
+            cursor.execute("SELECT difficulty, COUNT(*) FROM question_bank GROUP BY difficulty ORDER BY difficulty")
             difficulties = dict(cursor.fetchall())
             cursor.execute("""SELECT question_id, subject, topic, question, answer, expected_concepts, difficulty
-                            FROM bankresume ORDER BY question_id""")
+                            FROM question_bank ORDER BY question_id""")
             rows = cursor.fetchall()
-            cursor.execute("""SELECT COUNT(*) FROM bankresume
+            cursor.execute("""SELECT COUNT(*) FROM question_bank
                 WHERE question_id IS NULL OR subject IS NULL OR topic IS NULL OR question IS NULL
                 OR answer IS NULL OR expected_concepts IS NULL OR difficulty IS NULL
                 OR BTRIM(subject) = '' OR BTRIM(topic) = '' OR BTRIM(question) = ''
                 OR BTRIM(answer) = '' OR BTRIM(expected_concepts) = ''""")
             empty = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM bankresume WHERE difficulty NOT IN ('Easy','Medium','Hard')")
+            cursor.execute("SELECT COUNT(*) FROM question_bank WHERE difficulty NOT IN ('Easy','Medium','Hard')")
             invalid_difficulty = cursor.fetchone()[0]
             cursor.execute("""SELECT LOWER(REGEXP_REPLACE(BTRIM(question), '\\s+', ' ', 'g')), COUNT(*)
-                FROM bankresume GROUP BY 1 HAVING COUNT(*) > 1""")
+                FROM question_bank GROUP BY 1 HAVING COUNT(*) > 1""")
             exact_db = sum(count - 1 for _, count in cursor.fetchall())
-            cursor.execute("SELECT COUNT(*) FROM (SELECT question_hash FROM bankresume GROUP BY question_hash HAVING COUNT(*) > 1) d")
+            cursor.execute("SELECT COUNT(*) FROM (SELECT question_hash FROM question_bank GROUP BY question_hash HAVING COUNT(*) > 1) d")
             hash_collisions = cursor.fetchone()[0]
 
     questions = [row[3] for row in rows]
@@ -105,7 +105,7 @@ def export_sql() -> None:
     output = SCHEMA.read_text(encoding="utf-8")
     with transaction() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT subject, topic, question, answer, expected_concepts, difficulty, question_hash FROM bankresume ORDER BY question_id")
+            cursor.execute("SELECT subject, topic, question, answer, expected_concepts, difficulty, question_hash FROM question_bank ORDER BY question_id")
             rows = cursor.fetchall()
     import io
     from psycopg2 import sql
@@ -113,9 +113,9 @@ def export_sql() -> None:
     with transaction() as conn:
         buffer = io.StringIO()
         with conn.cursor() as cursor:
-            cursor.copy_expert("COPY (SELECT subject, topic, question, answer, expected_concepts, difficulty, question_hash FROM bankresume ORDER BY question_id) TO STDOUT", buffer)
-    output += "\nTRUNCATE public.bankresume RESTART IDENTITY;\n"
-    output += "COPY public.bankresume (subject, topic, question, answer, expected_concepts, difficulty, question_hash) FROM stdin;\n"
+            cursor.copy_expert("COPY (SELECT subject, topic, question, answer, expected_concepts, difficulty, question_hash FROM question_bank ORDER BY question_id) TO STDOUT", buffer)
+    output += "\nTRUNCATE public.question_bank RESTART IDENTITY;\n"
+    output += "COPY public.question_bank (subject, topic, question, answer, expected_concepts, difficulty, question_hash) FROM stdin;\n"
     output += buffer.getvalue() + "\\.\n"
     EXPORT.write_text(output, encoding="utf-8")
 

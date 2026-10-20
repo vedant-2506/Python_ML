@@ -43,24 +43,141 @@ def ensure_answer_evaluation_table(connection=None):
             conn.close()
 
 
-def get_question_details(jd_id: int, question_id: int, exam_id: str | None = None) -> Dict[str, Any]:
+def get_question_details(
+    jd_id: int,
+    question_id: int,
+    exam_id: str | None = None,
+    question_source: str | None = None,
+    stage: int | None = None,
+) -> Dict[str, Any]:
     """Fetch a Stage 1 or generated question snapshot for evaluation.
 
     The live project schema stores the expected answer as `reference_answer`, so
     we map that value to the evaluation's `expected_answer` field.
+    Differentiates between Stage 1 (Question Bank) and Stage 2 (LLM) questions.
     """
 
     conn = get_database_connection()
     try:
         with conn.cursor() as cursor:
-            # 1. Check ai_question_exam first if exam_id/question_id belongs to Stage 2
+            # If explicitly Stage 2 / groq_llm
+            if question_source in ("groq_llm", "LLM") or stage == 2:
+                query_ai = """
+                    SELECT jd_id, ai_question_exam_id, question, COALESCE(reference_answer, answer),
+                           expected_concepts, difficulty, skill, ai_question_exam_id
+                    FROM public.ai_question_exam
+                    WHERE jd_id = %s AND ai_question_exam_id = %s
+                """
+                params_ai: list[Any] = [jd_id, question_id]
+                if exam_id is not None:
+                    query_ai += " AND exam_id = %s"
+                    params_ai.append(str(exam_id))
+                cursor.execute(query_ai, params_ai)
+                ai_row = cursor.fetchone()
+                if ai_row is not None:
+                    return {
+                        "jd_id": ai_row[0],
+                        "question_id": ai_row[1],
+                        "question": ai_row[2],
+                        "expected_answer": ai_row[3],
+                        "expected_concepts": ai_row[4],
+                        "difficulty": ai_row[5],
+                        "skill": ai_row[6],
+                        "exam_question_id": ai_row[7],
+                        "question_source": "groq_llm",
+                    }
+                # Fallback to question_exam stage 2
+                query_q2 = """
+                    SELECT jd_id, generated_question_id, question, reference_answer,
+                           expected_concepts, difficulty, skill, exam_question_id
+                    FROM public.question_exam
+                    WHERE jd_id = %s AND (generated_question_id = %s OR exam_question_id = %s) AND stage = 2
+                """
+                params_q2: list[Any] = [jd_id, question_id, question_id]
+                if exam_id is not None:
+                    query_q2 += " AND exam_id = %s"
+                    params_q2.append(str(exam_id))
+                query_q2 += " ORDER BY exam_question_id DESC LIMIT 1"
+                cursor.execute(query_q2, params_q2)
+                row_q2 = cursor.fetchone()
+                if row_q2 is not None:
+                    return {
+                        "jd_id": row_q2[0],
+                        "question_id": row_q2[1],
+                        "question": row_q2[2],
+                        "expected_answer": row_q2[3],
+                        "expected_concepts": row_q2[4],
+                        "difficulty": row_q2[5],
+                        "skill": row_q2[6],
+                        "exam_question_id": row_q2[7],
+                        "question_source": "groq_llm",
+                    }
+                raise ValueError(f"No Stage 2 question found for jd_id={jd_id} and question_id={question_id}.")
+
+            # If explicitly Stage 1 / Question Bank or unspecified
+            if question_source in ("Question Bank", "bankresume") or stage == 1:
+                query_q1 = """
+                    SELECT jd_id, question_id, question, reference_answer,
+                           expected_concepts, difficulty, skill, exam_question_id
+                    FROM public.question_exam
+                    WHERE jd_id = %s AND question_id = %s AND stage = 1
+                """
+                params_q1: list[Any] = [jd_id, question_id]
+                if exam_id is not None:
+                    query_q1 += " AND exam_id = %s"
+                    params_q1.append(str(exam_id))
+                query_q1 += " ORDER BY exam_question_id DESC LIMIT 1"
+                cursor.execute(query_q1, params_q1)
+                row_q1 = cursor.fetchone()
+                if row_q1 is not None:
+                    return {
+                        "jd_id": row_q1[0],
+                        "question_id": row_q1[1],
+                        "question": row_q1[2],
+                        "expected_answer": row_q1[3],
+                        "expected_concepts": row_q1[4],
+                        "difficulty": row_q1[5],
+                        "skill": row_q1[6],
+                        "exam_question_id": row_q1[7],
+                        "question_source": "Question Bank",
+                    }
+                raise ValueError(f"No Stage 1 question found for jd_id={jd_id} and question_id={question_id}.")
+
+            # Unspecified: Check question_exam stage 1 first
+            query_q1 = """
+                SELECT jd_id, question_id, question, reference_answer,
+                       expected_concepts, difficulty, skill, exam_question_id
+                FROM public.question_exam
+                WHERE jd_id = %s AND question_id = %s AND stage = 1
+            """
+            params_q1 = [jd_id, question_id]
+            if exam_id is not None:
+                query_q1 += " AND exam_id = %s"
+                params_q1.append(str(exam_id))
+            query_q1 += " ORDER BY exam_question_id DESC LIMIT 1"
+            cursor.execute(query_q1, params_q1)
+            row_q1 = cursor.fetchone()
+            if row_q1 is not None:
+                return {
+                    "jd_id": row_q1[0],
+                    "question_id": row_q1[1],
+                    "question": row_q1[2],
+                    "expected_answer": row_q1[3],
+                    "expected_concepts": row_q1[4],
+                    "difficulty": row_q1[5],
+                    "skill": row_q1[6],
+                    "exam_question_id": row_q1[7],
+                    "question_source": "Question Bank",
+                }
+
+            # Then check ai_question_exam
             query_ai = """
                 SELECT jd_id, ai_question_exam_id, question, COALESCE(reference_answer, answer),
                        expected_concepts, difficulty, skill, ai_question_exam_id
                 FROM public.ai_question_exam
                 WHERE jd_id = %s AND ai_question_exam_id = %s
             """
-            params_ai: list[Any] = [jd_id, question_id]
+            params_ai = [jd_id, question_id]
             if exam_id is not None:
                 query_ai += " AND exam_id = %s"
                 params_ai.append(str(exam_id))
@@ -76,48 +193,37 @@ def get_question_details(jd_id: int, question_id: int, exam_id: str | None = Non
                     "difficulty": ai_row[5],
                     "skill": ai_row[6],
                     "exam_question_id": ai_row[7],
+                    "question_source": "groq_llm",
                 }
 
-            # 2. Check question_exam (Stage 1 question_id or Stage 2 generated_question_id)
-            query = """
-                SELECT jd_id, question_id, question, reference_answer,
-                       expected_concepts, difficulty, skill, exam_question_id
-                FROM public.question_exam
-                WHERE jd_id = %s AND question_id = %s AND stage = 1
-            """
-            parameters: list[Any] = [jd_id, question_id]
-            if exam_id is not None:
-                query += " AND exam_id = %s"
-                parameters.append(str(exam_id))
-            query += """
-                UNION ALL
+            # Then check question_exam stage 2
+            query_q2 = """
                 SELECT jd_id, generated_question_id, question, reference_answer,
                        expected_concepts, difficulty, skill, exam_question_id
                 FROM public.question_exam
-                WHERE jd_id = %s AND generated_question_id = %s AND stage = 2
+                WHERE jd_id = %s AND (generated_question_id = %s OR exam_question_id = %s) AND stage = 2
             """
-            parameters.extend([jd_id, question_id])
+            params_q2 = [jd_id, question_id, question_id]
             if exam_id is not None:
-                query += " AND exam_id = %s"
-                parameters.append(str(exam_id))
-            query += " ORDER BY exam_question_id DESC LIMIT 1"
-            cursor.execute(query, parameters)
-            rows = cursor.fetchall()
+                query_q2 += " AND exam_id = %s"
+                params_q2.append(str(exam_id))
+            query_q2 += " ORDER BY exam_question_id DESC LIMIT 1"
+            cursor.execute(query_q2, params_q2)
+            row_q2 = cursor.fetchone()
+            if row_q2 is not None:
+                return {
+                    "jd_id": row_q2[0],
+                    "question_id": row_q2[1],
+                    "question": row_q2[2],
+                    "expected_answer": row_q2[3],
+                    "expected_concepts": row_q2[4],
+                    "difficulty": row_q2[5],
+                    "skill": row_q2[6],
+                    "exam_question_id": row_q2[7],
+                    "question_source": "groq_llm",
+                }
 
-        if not rows:
-            raise ValueError(f"No question found for jd_id={jd_id} and question_id={question_id}.")
-
-        row = rows[0]
-        return {
-            "jd_id": row[0],
-            "question_id": row[1],
-            "question": row[2],
-            "expected_answer": row[3],
-            "expected_concepts": row[4],
-            "difficulty": row[5],
-            "skill": row[6],
-            "exam_question_id": row[7],
-        }
+        raise ValueError(f"No question found for jd_id={jd_id} and question_id={question_id}.")
     finally:
         conn.close()
 
@@ -130,7 +236,7 @@ def get_stage1_questions(jd_id: int, exam_id: str | None = None) -> List[Dict[st
         with conn.cursor() as cursor:
             if exam_id is None:
                 query = """
-                SELECT question_id, question, exam_question_id
+                SELECT question_id, question, exam_question_id, difficulty
                 FROM public.question_exam
                 WHERE jd_id = %s
                   AND stage = 1
@@ -147,7 +253,7 @@ def get_stage1_questions(jd_id: int, exam_id: str | None = None) -> List[Dict[st
                 parameters = (jd_id, jd_id)
             else:
                 query = """
-                SELECT question_id, question, exam_question_id
+                SELECT question_id, question, exam_question_id, difficulty
                 FROM public.question_exam
                 WHERE jd_id = %s
                   AND stage = 1
@@ -163,6 +269,7 @@ def get_stage1_questions(jd_id: int, exam_id: str | None = None) -> List[Dict[st
                 "question_id": row[0],
                 "question": row[1],
                 "exam_question_id": row[2],
+                "difficulty": row[3] if len(row) > 3 else "Medium",
             }
             for row in rows
         ]
@@ -202,7 +309,7 @@ def get_latest_exam_id(jd_id: int) -> str:
 
 
 def get_candidate_exam_ids(jd_id: int, candidate_id: int) -> List[str]:
-    """Return Stage 1 sessions with six answers for one candidate and JD."""
+    """Return Stage 1 sessions with recorded answers for one candidate and JD."""
 
     conn = get_database_connection()
     try:
@@ -211,16 +318,32 @@ def get_candidate_exam_ids(jd_id: int, candidate_id: int) -> List[str]:
                 """
                 SELECT ae.exam_id
                 FROM public.answer_evaluation ae
-                JOIN public.question_exam qe
-                  ON qe.exam_id = ae.exam_id
-                 AND qe.jd_id = ae.jd_id
-                 AND qe.question_id = ae.question_id
-                 AND qe.stage = 1
                 WHERE ae.jd_id = %s AND ae.candidate_id = %s
                   AND ae.exam_id IS NOT NULL
+                  AND ae.evaluation_status <> 'Superseded'
                 GROUP BY ae.exam_id
-                HAVING COUNT(DISTINCT ae.question_id) = 6
                 ORDER BY MAX(ae.evaluation_id) DESC
+                """,
+                (jd_id, candidate_id),
+            )
+            return [str(row[0]) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_candidate_all_exam_ids(jd_id: int, candidate_id: int) -> List[str]:
+    """Return all distinct exam IDs where the candidate has recorded answers for a JD."""
+    conn = get_database_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT ae.exam_id
+                FROM public.answer_evaluation ae
+                WHERE ae.jd_id = %s AND ae.candidate_id = %s
+                  AND ae.exam_id IS NOT NULL
+                  AND ae.evaluation_status <> 'Superseded'
+                ORDER BY ae.exam_id
                 """,
                 (jd_id, candidate_id),
             )
@@ -239,7 +362,7 @@ def get_exam_evaluation_rows(exam_id: str, candidate_id: int, jd_id: int) -> Lis
             cursor.execute(
                 """
                 SELECT evaluation_id, question_id, evaluation_status,
-                       obtained_marks, max_marks, candidate_answer
+                       obtained_marks, max_marks, candidate_answer, question_source
                 FROM public.answer_evaluation
                 WHERE exam_id = %s AND candidate_id = %s AND jd_id = %s
                 ORDER BY evaluation_id
@@ -254,6 +377,7 @@ def get_exam_evaluation_rows(exam_id: str, candidate_id: int, jd_id: int) -> Lis
                     "obtained_marks": row[3],
                     "max_marks": row[4],
                     "candidate_answer": row[5],
+                    "question_source": row[6],
                 }
                 for row in cursor.fetchall()
             ]
@@ -356,27 +480,32 @@ def calculate_first_six_average(
 def get_first_six_average(
     candidate_id: int,
     jd_id: int,
+    exam_id: str | None = None,
 ) -> Optional[Decimal]:
     """Calculate one candidate's Stage 1 average without persisting it."""
 
     conn = get_database_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                """
+            query = """
                 SELECT ae.evaluation_id, ae.question_id, ae.answer_score,
                        ae.evaluation_status, ae.candidate_answer
                 FROM public.answer_evaluation ae
                 JOIN public.question_exam qe
-                  ON qe.jd_id = ae.jd_id
+                  ON qe.exam_id = ae.exam_id
+                 AND qe.jd_id = ae.jd_id
                  AND qe.question_id = ae.question_id
                  AND qe.stage = 1
                 WHERE ae.candidate_id = %s
                   AND ae.jd_id = %s
-                ORDER BY ae.evaluation_id
-                """,
-                (candidate_id, jd_id),
-            )
+                  AND ae.evaluation_status <> 'Superseded'
+            """
+            params: list[Any] = [candidate_id, jd_id]
+            if exam_id is not None:
+                query += " AND ae.exam_id = %s"
+                params.append(str(exam_id))
+            query += " ORDER BY ae.evaluation_id"
+            cursor.execute(query, tuple(params))
             evaluations = cursor.fetchall()
         return calculate_first_six_average(evaluations)
     finally:
@@ -389,12 +518,14 @@ def save_candidate_answer(
     candidate_answer: Optional[str],
     candidate_id: int,
     exam_id: str | None = None,
+    question_source: str | None = None,
 ) -> int:
     """Insert a pending evaluation record into answer_evaluation."""
 
     if isinstance(candidate_id, bool) or not isinstance(candidate_id, int) or candidate_id < 1:
         raise ValueError("candidate_id must be a positive integer.")
-    detail = get_question_details(jd_id, question_id, exam_id)
+    detail = get_question_details(jd_id, question_id, exam_id, question_source=question_source)
+    source_to_save = question_source or detail.get("question_source", "Question Bank")
     candidate_text = None if candidate_answer is None else str(candidate_answer)
 
     conn = get_database_connection()
@@ -410,11 +541,12 @@ def save_candidate_answer(
                   AND jd_id = %s
                   AND exam_id IS NOT DISTINCT FROM %s
                   AND question_id = %s
+                  AND (question_source IS NOT DISTINCT FROM %s OR question_source IS NULL)
                   AND candidate_answer IS NOT DISTINCT FROM %s
                   AND evaluation_status = 'Pending'
                 LIMIT 1
                 """,
-                (candidate_id, jd_id, exam_id, question_id, candidate_text),
+                (candidate_id, jd_id, exam_id, question_id, source_to_save, candidate_text),
             )
             existing = cursor.fetchone()
             if existing:
@@ -442,9 +574,10 @@ def save_candidate_answer(
                     exam_id,
                     evaluation_status,
                     evaluation_notes,
-                    evaluated_at
+                    evaluated_at,
+                    question_source
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s)
                 RETURNING evaluation_id
                 """,
                 (
@@ -459,6 +592,7 @@ def save_candidate_answer(
                     exam_id,
                     "Pending",
                     "Candidate answer recorded and awaiting evaluation.",
+                    source_to_save,
                 ),
             )
             inserted_id = cursor.fetchone()[0]
@@ -467,6 +601,32 @@ def save_candidate_answer(
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def update_exam_session_status(exam_id: str, status: str) -> None:
+    """Update exam_sessions status safely."""
+    conn = get_database_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE public.exam_sessions SET status = %s WHERE exam_id = %s",
+                (status, str(exam_id)),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_exam_session_status(exam_id: str) -> str | None:
+    """Fetch status from public.exam_sessions."""
+    conn = get_database_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT status FROM public.exam_sessions WHERE exam_id = %s", (str(exam_id),))
+            row = cursor.fetchone()
+            return str(row[0]) if row else None
     finally:
         conn.close()
 

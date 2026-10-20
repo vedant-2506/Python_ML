@@ -216,7 +216,7 @@ def ensure_schema(conn) -> None:
 def insert_missing(conn, records: Iterable[Question]) -> int:
     values = [tuple(asdict(record).values()) for record in records]
     with conn.cursor() as cursor:
-        execute_values(cursor, """INSERT INTO bankresume
+        execute_values(cursor, """INSERT INTO question_bank
             (subject, topic, question, answer, expected_concepts, difficulty, question_hash)
             VALUES %s ON CONFLICT (question_hash) DO UPDATE SET
                 answer = EXCLUDED.answer,
@@ -231,7 +231,7 @@ def generate_to_target() -> dict[str, int]:
         inserted: dict[str, int] = {}
         for subject, target in TARGETS.items():
             with conn.cursor() as cursor:
-                cursor.execute("SELECT COUNT(*) FROM bankresume WHERE subject = %s", (subject,))
+                cursor.execute("SELECT COUNT(*) FROM question_bank WHERE subject = %s", (subject,))
                 existing = cursor.fetchone()[0]
             records = generate_records(subject, target)
             inserted[subject] = insert_missing(conn, records)
