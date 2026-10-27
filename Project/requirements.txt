@@ -8,3 +8,5 @@ numpy>=1.26
 sentence-transformers>=3.0,<6.0
 transformers>=4.40,<5.0
 torch>=2.2,<2.14
+python-dotenv
+google-genai

@@ -7,8 +7,10 @@ from .ats_calculator import (
     compute_rule_based_score,
     evaluate_candidate_against_jd,
     extract_numeric_score,
+    get_batch_gemini_evaluations,
     get_ollama_evaluation,
     get_ollama_score,
+    reset_gemini_failure_state,
 )
 from .ranking import rank_candidates
 
@@ -21,7 +23,9 @@ __all__ = [
     "compute_rule_based_score",
     "evaluate_candidate_against_jd",
     "extract_numeric_score",
+    "get_batch_gemini_evaluations",
     "get_ollama_evaluation",
     "get_ollama_score",
+    "reset_gemini_failure_state",
     "rank_candidates",
 ]
