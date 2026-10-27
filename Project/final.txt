@@ -1,0 +1,736 @@
+================================================================================
+                       RANKRESUME - PROJECT SPECIFICATION & STRUCTURE
+================================================================================
+
+This document provides a comprehensive overview of the RankResume project:
+1. Complete Directory and Folder Structure
+2. Detailed Explanation of Every Folder and File
+3. Database Architecture & PostgreSQL Configuration
+4. Complete Database Tables, Column Definitions, Data Types, and Constraints
+5. Detailed Output Storage (Which Table Stores What Output & JSONB Schemas)
+6. End-to-End Pipeline Workflow & Table Relationships
+
+================================================================================
+1. PROJECT FOLDER & FILE STRUCTURE
+================================================================================
+
+Project Root: C:\Python_ML\Project
+
+Project/
+│
+├── .env                                # Environment variables (DB credentials, API keys)
+├── .gitignore                           # Git ignore rules
+├── fix_question_bank_references.py      # Utility script updating SQL references to question_bank
+├── MS2503.md                            # Development notes and work log (DB store & schema)
+├── MS2504.md                            # Development notes and work log (ATS scoring details)
+├── requirements.txt                     # Global Python package dependencies
+├── setup_windows.ps1                    # Setup script for configuring environment on Windows
+├── skills_en.csv                        # ESCO skills dataset CSV (~9.3 MB)
+├── test_gemini.py                       # Verification test for Gemini API integration
+├── test_llm_scorer.py                   # Verification test for ATS LLM scorer (Gemini/Ollama)
+│
+├── Answer_Checking/                     # Subsystem: Candidate answer collection & NLP evaluation
+│   ├── __init__.py                      # Package initialization
+│   ├── config.py                        # Database config & evaluation threshold settings
+│   ├── database.py                      # DB connection and queries for answer_evaluation table
+│   ├── manual_answer_input.py           # CLI tool for interactive candidate answer entry
+│   ├── manual_answer_input.py.before_fix.bak # Backup file
+│   ├── manual_answer_input.py.broken.bak     # Backup file
+│   ├── claim_extractor.py               # Deconstructs candidate answers into atomic claims
+│   ├── semantic_similarity.py           # Evaluates answer similarity using Sentence-Transformers
+│   ├── factual_correctness.py           # Evaluates factual correctness using NLI / LLM
+│   ├── answer_evaluator.py              # Blends semantic & factual scores into final question score
+│   ├── run_evaluation.py                # Batch runner evaluating all pending answers
+│   ├── final_result.py                  # Computes 60/40 weighted final exam result
+│   ├── requirements.txt                 # Dependencies specific to Answer_Checking
+│   ├── README.md                        # Documentation for Answer_Checking subsystem
+│   ├── sql/                             # SQL DDL schemas for Answer_Checking
+│   │   ├── create_answer_evaluation.sql        # Table DDL for public.answer_evaluation
+│   │   └── create_final_evaluation_result.sql  # Table DDL for public.final_evaluation_result
+│   └── tests/                           # Unit and integration test suite
+│       ├── __init__.py                  # Test package initialization
+│       ├── test_answer_evaluator.py     # Tests for scoring and classification logic
+│       ├── test_assessment_workflow.py  # Tests for end-to-end evaluation workflow
+│       ├── test_complete_workflow.py    # Tests for full Stage 1 & Stage 2 answer lifecycle
+│       ├── test_database.py             # Tests for DB helper queries and transactions
+│       ├── test_factual_correctness.py  # Tests for claim verification logic
+│       ├── test_final_result.py         # Tests for final 60/40 weighted scoring
+│       ├── test_manual_answer_input.py  # Tests for answer input command handling
+│       ├── test_run_evaluation.py       # Tests for batch evaluation execution
+│       └── test_semantic_similarity.py  # Tests for semantic similarity embeddings
+│
+├── ATS_calculation/                     # Subsystem: Resume-JD ATS scoring & candidate ranking
+│   ├── __init__.py                      # Package initialization and public API exports
+│   ├── ats_calculator.py                # Combines rule-based and LLM scores (60/40 blend)
+│   ├── ranking.py                       # Reads candidate ATS scores and assigns competition ranks
+│   ├── LLM_based/                       # LLM scoring sub-package
+│   │   ├── __init__.py                  # Package initialization
+│   │   └── llm_scorer.py                # ATS scoring via Ollama (llama3) and Gemini API
+│   └── rule_based/                      # Rule-based scoring sub-package
+│       ├── __init__.py                  # Package initialization
+│       ├── rule_based_calculator.py     # 6-factor deterministic scoring (Keyword, Similarity, Title, Exp, Edu, Cert)
+│       └── text_utils.py                # NLP text cleaning, stem matching, experience parsing
+│
+├── Data/                                # Raw and processed data assets
+│   ├── jds.json                         # Exported JSON dataset of parsed Job Descriptions
+│   ├── resumes.json                     # Exported JSON dataset of parsed Resumes
+│   ├── jds/                             # Raw JD input files (.pdf, .docx, .doc, .csv, .json)
+│   ├── resumes/                         # Raw Resume input files (.pdf, .docx, .doc)
+│   └── logs/                            # Application logs
+│       └── rankresume.log               # Ingestion and processing pipeline log
+│
+├── DB_Store/                            # Subsystem: Document ingestion, parsing & DB persistence
+│   ├── __init__.py                      # Package initialization
+│   ├── database_setup.sql               # Full schema DDL + ESCO & Technology reference data dump
+│   ├── DB_Store_info.md                 # Complete technical documentation of DB_Store
+│   ├── rankresume_pipeline.ipynb        # Interactive walkthrough notebook for ingestion
+│   └── rankresume_pipeline.py           # Core pipeline: file extraction, cleaning, parsing, DB store
+│
+├── Question_Generation/                 # Subsystem: Curated core computer science question bank
+│   ├── __init__.py                      # Package initialization
+│   ├── bankresume_schema.sql            # Table DDL for public.bankresume (question_bank)
+│   ├── database.py                      # Connection and transaction helper
+│   ├── generation_output.txt            # Console output log from question generation run
+│   ├── question_bank.sql                # Complete SQL dump of 5,194 curated questions with COPY
+│   ├── question_bank_report.json        # Verification report: question counts per subject/topic
+│   ├── question_deduplicator.py         # Exact and near-duplicate detection logic (shingling)
+│   ├── question_generator.py            # Generates balanced catalog of 5,194 questions across CS topics
+│   ├── question_validator.py            # Audits PostgreSQL question_bank and exports question_bank.sql
+│   ├── README.md                        # Documentation for Question_Generation
+│   └── validation_output.txt            # Audit output log
+│
+├── Question_Selection_Generation/       # Subsystem: JD-based question selection & adaptive LLM questions
+│   ├── __init__.py                      # Package initialization
+│   ├── adaptive_policy.py               # Selects Stage 2 difficulty distribution based on Stage 1 score
+│   ├── config.py                        # Configuration and environment settings
+│   ├── db_helper.py                     # Database helper functions for selection & sessions
+│   ├── exam_workflow.py                 # Coordinates exam creation, question selection & snapshot
+│   ├── groq_client.py                   # Client wrapper for Groq LLM API
+│   ├── LLM_Question_Generation.ipynb    # Walkthrough notebook for Stage 2 question generation
+│   ├── llm_question_generator.py        # Generates adaptive questions via Groq LLM
+│   ├── Question_Selection_Generation.ipynb # Walkthrough notebook for Stage 1 selection
+│   ├── question_selector.py             # Classifies skills (Core/Changeable) & selects Stage 1 bank questions
+│   ├── README.md                        # Complete technical documentation of Question Selection & Generation
+│   ├── selection_generation_schema.sql  # SQL DDL for exam_sessions, generated_questions, question_exam, ai_question_exam
+│   ├── stage2_workflow.py               # Generates and persists candidate-specific Stage 2 questions
+│   ├── prompts/                         # System and user prompts for LLM question generation
+│   │   ├── __init__.py                  # Package initialization
+│   │   └── adaptive_question_prompt.py  # Prompt templates for adaptive question generation
+│   └── tests/                           # Unit tests for Question Selection & Generation
+│       ├── __init__.py                  # Package initialization
+│       ├── test_llm_generation.py       # Tests for LLM question generation schema and prompt
+│       ├── test_question_selection.py   # Tests for Stage 1 core skill matching and question picking
+│       └── test_stage2.py               # Tests for Stage 2 workflow and database integration
+│
+├── scratch/                             # Temporary exploratory scripts
+│   └── inspect_candidate.py             # Utility to inspect candidate records in the database
+│
+└── scripts/                             # Helper scripts directory (reserved)
+
+
+================================================================================
+2. DATABASE ARCHITECTURE
+================================================================================
+
+- Database Management System: PostgreSQL
+- Database Name: rankresume
+- Host: localhost (configurable via RANKRESUME_DB_HOST)
+- Port: 5432 (configurable via RANKRESUME_DB_PORT)
+- User: postgres / root (configurable via RANKRESUME_DB_USER)
+- Password: Configured via environment variable RANKRESUME_DB_PASSWORD
+
+The database `rankresume` consists of 12 distinct tables categorized into 5 functional modules:
+
+1. Document Ingestion & Master Vocabularies (DB_Store):
+   - candidate
+   - job_description
+   - technology_dictionary
+   - technology_alias
+   - "ESCO_Skills"
+
+2. ATS Scoring & Assessment (ATS_calculation & DB_Store):
+   - ats_score
+
+3. Curated Question Repository (Question_Generation):
+   - bankresume (also referenced as question_bank)
+
+4. Exam Sessions & Question Snapshots (Question_Selection_Generation):
+   - exam_sessions
+   - generated_questions
+   - question_exam
+   - ai_question_exam
+
+5. Candidate Answer Checking & Final Result (Answer_Checking):
+   - answer_evaluation
+   - final_evaluation_result
+
+
+================================================================================
+3. DATABASE TABLES, COLUMNS, TYPES & STORED OUTPUT
+================================================================================
+
+--------------------------------------------------------------------------------
+TABLE 1: candidate
+--------------------------------------------------------------------------------
+- Owning Module: DB_Store
+- Purpose: Stores processed candidate resume records, raw extracted text,
+  cleaned text, contact information, structured JSON parsing results,
+  and ATS evaluation score placeholders.
+- Stored Output:
+  * Extracted text and normalized text from candidate resumes (.pdf, .docx, .doc).
+  * Candidate contact data (name, email, phone).
+  * Validated JSON structure of skills, education, projects, experience, and certificates.
+  * Computed overall ATS score (`ats_score`) and final assessment score (`final_score`).
+
+Columns:
+  1. candidate_id       : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique auto-incrementing identity for each candidate.
+  2. candidate_name     : VARCHAR(150) | NULLABLE
+     Parsed candidate name from resume header heuristics.
+  3. email              : VARCHAR(150) | NULLABLE
+     Parsed email address extracted via regex.
+  4. phone              : VARCHAR(30) | NULLABLE
+     Parsed telephone / mobile number extracted via regex.
+  5. resume_file_name   : VARCHAR(255) | NULLABLE
+     Original file name of the resume from Data/resumes/.
+  6. resume_hash        : VARCHAR(64) | UNIQUE | NULLABLE
+     SHA-256 cryptographic hash of the resume file bytes (prevents duplicate file ingestion).
+  7. raw_text           : TEXT | NULLABLE
+     Full unadulterated text extracted directly from the resume file.
+  8. clean_text         : TEXT | NULLABLE
+     Text cleaned via NLP (lowercased, stopwords removed, protected tech terms preserved).
+  9. structured_data    : JSONB | NULLABLE
+     Structured resume representation validated against schema:
+     {
+       "skill": ["python", "docker", "postgresql"],
+       "education": [{"degree": "bachelor of technology", "mark": "85%"}],
+       "project": [{"project_title": "...", "description": "..."}],
+       "experience": [{"job_role": "...", "skills": [...], "duration": "..."}],
+       "certificate": ["aws certified solutions architect"]
+     }
+ 10. ats_score          : DOUBLE PRECISION (FLOAT) | NULLABLE
+     Overall combined ATS match score (0.0 to 100.0) calculated against a JD.
+ 11. final_score        : DOUBLE PRECISION (FLOAT) | NULLABLE
+     Overall final score across ATS and interview exam evaluation.
+ 12. created_at         : TIMESTAMP | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of initial record ingestion.
+
+--------------------------------------------------------------------------------
+TABLE 2: job_description
+--------------------------------------------------------------------------------
+- Owning Module: DB_Store
+- Purpose: Stores processed Job Description (JD) records, raw text, clean text,
+  and structured requirements JSON.
+- Stored Output:
+  * Extracted text from JD files (.pdf, .docx, .doc, .csv, .json).
+  * Extracted job title.
+  * Validated JSON requirements: expected skills, degrees, required experience, certificates.
+
+Columns:
+  1. jd_id              : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique auto-incrementing identity for each job description.
+  2. job_title          : VARCHAR(150) | NULLABLE
+     Standardized or extracted title of the job opening.
+  3. jd_file_name       : VARCHAR(255) | NULLABLE
+     Original file name of the JD from Data/jds/.
+  4. raw_text           : TEXT | NULLABLE
+     Full original text extracted from the source document.
+  5. clean_text         : TEXT | NULLABLE
+     Cleaned text with stopwords removed and technology tokens protected.
+  6. structured_data    : JSONB | NULLABLE
+     Structured requirements representation validated against schema:
+     {
+       "job_title": "backend python developer",
+       "expected_skills": ["python", "fastapi", "postgresql", "docker"],
+       "expected_education": [{"degree": "bachelor", "percentage/mark": "60%"}],
+       "expected_experience": [{"skill": ["python"], "years": "2-4 years"}],
+       "expected_certificate": ["aws certified"]
+     }
+  7. created_at         : TIMESTAMP | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of initial record creation.
+
+--------------------------------------------------------------------------------
+TABLE 3: ats_score
+--------------------------------------------------------------------------------
+- Owning Module: ATS_calculation / DB_Store
+- Purpose: Stores granular ATS evaluation factor scores and computed hybrid
+  scores between a specific candidate resume and job description.
+- Stored Output:
+  * Six individual rule-based factor scores (Keyword, Similarity, Title, Exp, Edu, Achievement).
+  * Overall rule-based score (weighted combination of the 6 factors).
+  * LLM-based holistic evaluation score (from Ollama/Gemini).
+  * Computed timestamp.
+
+Columns:
+  1. id                 : SERIAL (INTEGER) | PRIMARY KEY
+     Unique record identity for the ATS score entry.
+  2. candidate_id       : INTEGER | NOT NULL | FOREIGN KEY -> candidate(candidate_id)
+     Reference to the evaluated candidate.
+  3. jd_id              : INTEGER | NULLABLE
+     Reference to the target job description.
+  4. keyword_score      : NUMERIC(5,2) | NULLABLE
+     Match score (0-100) based on JD required skills found in resume (weight: 35%).
+  5. similarity_score   : NUMERIC(5,2) | NULLABLE
+     Semantic similarity score (0-100) between project descriptions and JD (weight: 20%).
+  6. title_score        : NUMERIC(5,2) | NULLABLE
+     Match score (0-100) between candidate past job roles and JD title (weight: 10%).
+  7. experience_score   : NUMERIC(5,2) | NULLABLE
+     Score (0-100) based on candidate years of experience vs required (weight: 15%).
+  8. education_score    : NUMERIC(5,2) | NULLABLE
+     Score (0-100) based on degree level (PhD > MS > BS > Diploma) and marks (weight: 15%).
+  9. achievement_score  : NUMERIC(5,2) | NULLABLE
+     Score (0-100) based on matching certifications and awards (weight: 5%).
+ 10. rule_based_score   : NUMERIC(5,2) | NULLABLE
+     Weighted sum of the above 6 rule-based factors (0-100).
+ 11. llm_based_score    : NUMERIC(5,2) | NULLABLE
+     Holistic score (0-100) generated by LLM (Ollama llama3 / Gemini).
+ 12. computed_at        : TIMESTAMP | DEFAULT NOW()
+     Timestamp of ATS score calculation.
+
+--------------------------------------------------------------------------------
+TABLE 4: technology_dictionary
+--------------------------------------------------------------------------------
+- Owning Module: DB_Store
+- Purpose: Master controlled vocabulary of technical skills, programming
+  languages, tools, frameworks, and concepts used for keyword normalization.
+- Stored Output:
+  * Canonical names of technologies.
+  * Technology category (e.g., programming_language, framework, database, tool, soft_skill).
+  * JSON array of recognized aliases and synonyms.
+
+Columns:
+  1. tech_id            : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique identity for each canonical technology.
+  2. canonical_name     : VARCHAR(100) | NOT NULL
+     Standardized name (e.g., "JavaScript", "PostgreSQL", "Docker").
+  3. category           : VARCHAR(50) | NULLABLE
+     Category classification (e.g., "programming_language", "database", "cloud").
+  4. aliases            : JSONB | NULLABLE
+     JSON array of alternative names (e.g., ["js", "node", "es6"]).
+  5. created_at         : TIMESTAMP | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of vocabulary seed.
+
+--------------------------------------------------------------------------------
+TABLE 5: technology_alias
+--------------------------------------------------------------------------------
+- Owning Module: DB_Store
+- Purpose: Relational mapping between each specific alias/synonym and its
+  canonical entry in `technology_dictionary`.
+- Stored Output:
+  * Unique alias string mapped to its canonical tech_id.
+
+Columns:
+  1. alias_id           : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique identity for the alias entry.
+  2. tech_id            : BIGINT | NOT NULL | FOREIGN KEY -> technology_dictionary(tech_id) ON DELETE CASCADE
+     Reference to the parent canonical technology.
+  3. alias_name         : VARCHAR(150) | NOT NULL | UNIQUE
+     Normalized alias string (e.g., "postgres", "reactjs", "k8s").
+
+--------------------------------------------------------------------------------
+TABLE 6: "ESCO_Skills"
+--------------------------------------------------------------------------------
+- Owning Module: DB_Store
+- Purpose: External reference repository of European Skills, Competences,
+  Qualifications and Occupations (ESCO) imported from `skills_en.csv`.
+- Stored Output:
+  * 13,939 reference skills with standardized concept URIs, preferred labels,
+    alternative labels, reuse levels, and classification types.
+
+Columns:
+  1. esco_id            : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique auto-incrementing identity for the ESCO skill.
+  2. concept_uri        : TEXT | UNIQUE
+     Global ESCO URI identifier for the skill concept.
+  3. concept_type       : TEXT | NULLABLE
+     Type of concept (e.g., "KnowledgeSkillCompetence").
+  4. skill_type         : TEXT | NULLABLE
+     Skill classification (e.g., "skill/competence", "knowledge").
+  5. reuse_level        : TEXT | NULLABLE
+     Applicability scope (e.g., "cross-sector", "sector-specific", "occupation-specific").
+  6. preferred_label    : TEXT | NULLABLE
+     Standard canonical name in ESCO.
+  7. alt_labels         : TEXT | NULLABLE
+     Newline-separated list of recognized alternate labels.
+  8. hidden_labels      : TEXT | NULLABLE
+     Spelling variations or internal indexing terms.
+  9. status             : TEXT | NULLABLE
+     Publication status (e.g., "released").
+ 10. modified_date      : TIMESTAMP WITHOUT TIME ZONE | NULLABLE
+     Last modification date from ESCO release.
+ 11. scope_note         : TEXT | NULLABLE
+     Definitional notes and exclusions.
+
+--------------------------------------------------------------------------------
+TABLE 7: bankresume / question_bank
+--------------------------------------------------------------------------------
+- Owning Module: Question_Generation
+- Purpose: Curated question bank of 5,194 technical interview questions covering
+  14 Core Computer Science topics and 14 Programming Languages.
+- Stored Output:
+  * Pre-generated technical questions, model reference answers, expected concept
+    keywords, difficulty ratings, and SHA-256 deduplication hashes.
+
+Columns:
+  1. question_id        : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique identity for the bank question.
+  2. subject            : VARCHAR(100) | NOT NULL
+     Subject domain (e.g., "Data Structures", "Operating Systems", "Python", "SQL").
+  3. topic              : VARCHAR(200) | NOT NULL
+     Specific concept within subject (e.g., "binary search", "encapsulation", "indexing").
+  4. question           : TEXT | NOT NULL
+     Full text of the technical interview question.
+  5. answer             : TEXT | NOT NULL
+     Detailed standard model/reference answer.
+  6. expected_concepts  : TEXT | NOT NULL
+     Comma-separated list of key concepts required in a correct response.
+  7. difficulty         : VARCHAR(20) | NOT NULL | CHECK (difficulty IN ('Easy', 'Medium', 'Hard'))
+     Question difficulty rating.
+  8. question_hash      : CHAR(64) | NOT NULL | UNIQUE
+     SHA-256 hash of question text for deduplication.
+  9. created_at         : TIMESTAMP | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of record creation.
+
+--------------------------------------------------------------------------------
+TABLE 8: exam_sessions
+--------------------------------------------------------------------------------
+- Owning Module: Question_Selection_Generation
+- Purpose: Manages overall interview examination sessions for specific JDs.
+- Stored Output:
+  * Session UUID, associated JD, start time, end time, duration, and session state.
+
+Columns:
+  1. exam_id            : UUID | PRIMARY KEY
+     Unique UUID generated for each exam instance.
+  2. jd_id              : BIGINT | NOT NULL | FOREIGN KEY -> job_description(jd_id)
+     Reference to the job description for which the exam is created.
+  3. started_at         : TIMESTAMP | NOT NULL | DEFAULT CURRENT_TIMESTAMP
+     Session start timestamp.
+  4. ends_at            : TIMESTAMP | NOT NULL
+     Session expiration timestamp.
+  5. duration_minutes   : SMALLINT | NOT NULL | DEFAULT 30 | CHECK (duration_minutes = 30)
+     Exam duration in minutes (fixed at 30 minutes).
+  6. status             : VARCHAR(30) | NOT NULL | DEFAULT 'STAGE1_READY'
+     State machine tracking: 'STAGE1_READY', 'STAGE1_SUBMITTED', 'STAGE2_READY', 'COMPLETED'.
+
+--------------------------------------------------------------------------------
+TABLE 9: generated_questions
+--------------------------------------------------------------------------------
+- Owning Module: Question_Selection_Generation
+- Purpose: Stores dynamically generated adaptive interview questions produced
+  by LLM (Groq) for Stage 2 of an exam.
+- Stored Output:
+  * Questions generated on the fly targeting candidate-specific changeable skills.
+  * Model reference answers, expected concept list in JSONB, model name, and session hash.
+
+Columns:
+  1. generated_question_id : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique identity for each generated question.
+  2. exam_id            : UUID | NOT NULL | FOREIGN KEY -> exam_sessions(exam_id)
+     Reference to the exam session.
+  3. jd_id              : BIGINT | NOT NULL | FOREIGN KEY -> job_description(jd_id)
+     Reference to the target job description.
+  4. skill              : VARCHAR(200) | NOT NULL
+     The specific JD skill tested by this question (from changeable skills).
+  5. question           : TEXT | NOT NULL
+     Generated question text.
+  6. reference_answer   : TEXT | NOT NULL
+     Generated ideal reference answer.
+  7. expected_concepts  : JSONB | NOT NULL
+     Array of concept keywords required in the answer.
+  8. difficulty         : VARCHAR(20) | NOT NULL | CHECK (difficulty IN ('Easy', 'Medium', 'Hard'))
+     Difficulty assigned by the adaptive policy.
+  9. model_name         : VARCHAR(200) | NOT NULL
+     Name of the LLM generating the question (e.g., "llama-3.3-70b-versatile").
+ 10. question_hash      : CHAR(64) | NOT NULL
+     SHA-256 hash of question text.
+ 11. created_at         : TIMESTAMP | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of generation.
+ Constraints:
+  * UNIQUE (exam_id, question_hash)
+
+--------------------------------------------------------------------------------
+TABLE 10: question_exam
+--------------------------------------------------------------------------------
+- Owning Module: Question_Selection_Generation
+- Purpose: Master ordered exam question paper (Stage 1 and Stage 2 questions)
+  bound to an exam session.
+- Stored Output:
+  * Exactly 10 ordered exam questions (Questions 1 to 6 from Question Bank; Questions 7 to 10 from LLM).
+  * Maps each question position to its source, text, expected answer, difficulty, and skill.
+
+Columns:
+  1. exam_question_id   : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique record identity for the exam question position.
+  2. exam_id            : UUID | NOT NULL | FOREIGN KEY -> exam_sessions(exam_id)
+     Reference to the exam session.
+  3. jd_id              : BIGINT | NOT NULL | FOREIGN KEY -> job_description(jd_id)
+     Reference to the target job description.
+  4. question_order     : SMALLINT | NOT NULL | CHECK (question_order BETWEEN 1 AND 10)
+     Position of the question in the exam paper (1 to 10).
+  5. stage              : SMALLINT | NOT NULL | CHECK (stage IN (1, 2))
+     Exam stage: 1 (Question Bank questions 1-6) or 2 (Adaptive LLM questions 7-10).
+  6. source             : VARCHAR(20) | NOT NULL | CHECK (source IN ('Question Bank', 'LLM'))
+     Source origin of the question.
+  7. question_id        : BIGINT | NULLABLE | FOREIGN KEY -> bankresume(question_id)
+     Foreign key to question_bank (populated when source = 'Question Bank').
+  8. generated_question_id : BIGINT | NULLABLE | FOREIGN KEY -> generated_questions(generated_question_id)
+     Foreign key to generated_questions (populated when source = 'LLM').
+  9. question           : TEXT | NOT NULL
+     Question prompt text presented to candidate.
+ 10. reference_answer   : TEXT | NOT NULL
+     Model reference answer used for checking.
+ 11. expected_concepts  : JSONB | NOT NULL
+     Expected conceptual keywords in JSONB.
+ 12. difficulty         : VARCHAR(20) | NOT NULL | CHECK (difficulty IN ('Easy', 'Medium', 'Hard'))
+     Difficulty level ('Easy' = 6 marks, 'Medium' = 12 marks, 'Hard' = 18 marks in Stage 1).
+ 13. skill              : VARCHAR(200) | NULLABLE
+     Associated skill domain.
+ 14. created_at         : TIMESTAMP | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of snapshot creation.
+ Constraints:
+  * UNIQUE (exam_id, question_order)
+  * CHECK: ((source = 'Question Bank' AND question_id IS NOT NULL AND generated_question_id IS NULL)
+        OR (source = 'LLM' AND question_id IS NULL AND generated_question_id IS NOT NULL))
+
+--------------------------------------------------------------------------------
+TABLE 11: ai_question_exam
+--------------------------------------------------------------------------------
+- Owning Module: Question_Selection_Generation
+- Purpose: Stores candidate-specific Stage 2 adaptive question snapshots
+  generated by Groq LLM based on the candidate's Stage 1 performance.
+- Stored Output:
+  * Exactly 4 candidate-tailored adaptive questions (orders 1-4) reflecting the
+    candidate's proficiency in changeable skills.
+
+Columns:
+  1. ai_question_exam_id : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique record identity.
+  2. exam_id            : UUID | NOT NULL | FOREIGN KEY -> exam_sessions(exam_id)
+     Reference to exam session.
+  3. jd_id              : BIGINT | NOT NULL | FOREIGN KEY -> job_description(jd_id)
+     Reference to job description.
+  4. candidate_id       : BIGINT | NOT NULL | FOREIGN KEY -> candidate(candidate_id)
+     Reference to the specific candidate being tested.
+  5. question_order     : SMALLINT | NOT NULL | CHECK (question_order BETWEEN 1 AND 4)
+     Order of the adaptive question in Stage 2 (1 to 4).
+  6. source             : VARCHAR(30) | NOT NULL | DEFAULT 'groq_llm' | CHECK (source = 'groq_llm')
+     LLM generation source.
+  7. question           : TEXT | NOT NULL
+     Question text.
+  8. answer             : TEXT | NOT NULL
+     Reference answer generated by the model.
+  9. reference_answer   : TEXT | NOT NULL
+     Reference answer for evaluation.
+ 10. expected_concepts  : JSONB | NOT NULL
+     Expected concepts in JSONB.
+ 11. difficulty         : VARCHAR(20) | NOT NULL | CHECK (difficulty IN ('Easy', 'Medium', 'Hard'))
+     Difficulty chosen adaptively (Easy, Medium, Hard).
+ 12. skill              : VARCHAR(200) | NOT NULL
+     Target changeable skill tested.
+ 13. model_name         : VARCHAR(200) | NOT NULL
+     Model identifier (e.g., "llama-3.3-70b-versatile").
+ 14. question_hash      : CHAR(64) | NOT NULL
+     SHA-256 hash of question text.
+ 15. created_at         : TIMESTAMPTZ | NOT NULL | DEFAULT CURRENT_TIMESTAMP
+     Timestamp of creation.
+ Constraints:
+  * UNIQUE (exam_id, candidate_id, question_order)
+  * UNIQUE (exam_id, candidate_id, question_hash)
+
+--------------------------------------------------------------------------------
+TABLE 12: answer_evaluation
+--------------------------------------------------------------------------------
+- Owning Module: Answer_Checking
+- Purpose: Stores submitted candidate answers and their automated NLP
+  evaluation scores for every question in an exam.
+- Stored Output:
+  * Candidate's submitted text answer.
+  * Extracted atomic claims and expected factual points in JSONB.
+  * Semantic similarity score (0.00 to 1.00 or 0 to 100).
+  * Factual correctness score (0.00 to 1.00 or 0 to 100).
+  * Blended answer score (50% semantic + 50% factual).
+  * Marks obtained based on question difficulty weighting.
+  * Qualitative classification ('Correct', 'Partially Correct', 'Incorrect').
+  * Status ('Pending', 'Completed', 'Review Required') and evaluation notes.
+
+Columns:
+  1. evaluation_id      : BIGSERIAL (BIGINT) | PRIMARY KEY
+     Unique evaluation record identity.
+  2. candidate_id       : INTEGER / BIGINT | NULLABLE
+     Reference to candidate.
+  3. exam_id            : UUID | NULLABLE | FOREIGN KEY -> exam_sessions(exam_id)
+     Reference to exam session.
+  4. jd_id              : BIGINT | NOT NULL
+     Reference to job description.
+  5. question_id        : BIGINT | NOT NULL
+     Reference to question_bank.question_id or ai_question_exam.ai_question_exam_id.
+  6. expected_answer    : TEXT | NULLABLE
+     Official reference answer against which the candidate is scored.
+  7. candidate_answer   : TEXT | NULLABLE
+     Raw answer text typed or submitted by the candidate.
+  8. difficulty         : VARCHAR(50) | NULLABLE
+     Difficulty rating ('Easy', 'Medium', 'Hard').
+  9. max_marks          : NUMERIC(10, 2) | NULLABLE
+     Maximum marks possible (Easy = 6, Medium = 12, Hard = 18 for Stage 1).
+ 10. expected_facts     : JSONB | NULLABLE
+     Atomic facts extracted from reference answer for NLI checking:
+     [
+       {"fact": "Encapsulation hides internal object state.", "category": "core"},
+       {"fact": "Callers access data via public methods.", "category": "mechanism"}
+     ]
+ 11. semantic_score     : NUMERIC(5, 2) | NULLABLE
+     Cosine similarity between embeddings of candidate answer and reference answer (50% weight).
+ 12. factual_correctness_score : NUMERIC(5, 2) | NULLABLE
+     NLI entailment score measuring how many expected facts are verified (50% weight).
+ 13. answer_score       : NUMERIC(5, 2) | NULLABLE
+     Combined score (0.50 * semantic_score + 0.50 * factual_correctness_score).
+ 14. classification     : VARCHAR(30) | NULLABLE
+     Qualitative rating: 'Correct' (>=75%), 'Partially Correct' (40-74%), 'Incorrect' (<40%).
+ 15. obtained_marks     : NUMERIC(10, 2) | NULLABLE
+     Calculated marks: (answer_score / 100.0) * max_marks.
+ 16. evaluation_status  : VARCHAR(30) | NOT NULL | DEFAULT 'Pending'
+     Evaluation lifecycle status: 'Pending', 'Completed', 'Review Required'.
+ 17. evaluation_notes   : TEXT | NULLABLE
+     Explanatory notes, missing facts, or evaluation warnings.
+ 18. evaluated_at       : TIMESTAMPTZ | DEFAULT NOW()
+     Timestamp of evaluation execution.
+ 19. question_source    : VARCHAR(50) | NULLABLE
+     Source indicator: 'Question Bank' (Stage 1) or 'groq_llm' / 'LLM' (Stage 2).
+
+--------------------------------------------------------------------------------
+TABLE 13: final_evaluation_result
+--------------------------------------------------------------------------------
+- Owning Module: Answer_Checking
+- Purpose: Stores aggregated final exam scores for each candidate per exam session.
+- Stored Output:
+  * Stage 1 average score across the first 6 bank questions.
+  * Stage 2 average score across the last 4 adaptive LLM questions.
+  * Final weighted composite score (60% Stage 1 + 40% Stage 2).
+  * Completion status and calculation timestamp.
+
+Columns:
+  1. exam_id            : UUID | NOT NULL
+     Exam session identifier.
+  2. jd_id              : BIGINT | NOT NULL
+     Job description identifier.
+  3. candidate_id       : INTEGER | NOT NULL
+     Candidate identifier.
+  4. first_six_average  : NUMERIC(5, 2) | NOT NULL
+     Average score of the 6 Stage 1 Question Bank answers.
+  5. last_four_average  : NUMERIC(5, 2) | NOT NULL
+     Average score of the 4 Stage 2 LLM-generated answers.
+  6. final_result       : NUMERIC(5, 2) | NOT NULL
+     Composite exam score: 0.60 * first_six_average + 0.40 * last_four_average.
+  7. evaluation_status  : VARCHAR(30) | NOT NULL | DEFAULT 'Completed'
+     Overall exam completion status ('Completed').
+  8. calculated_at      : TIMESTAMPTZ | NOT NULL | DEFAULT NOW()
+     Timestamp when the final result was computed and stored.
+ Constraints:
+  * UNIQUE (exam_id, candidate_id)
+
+
+================================================================================
+4. SUMMARY: WHICH TABLE STORES WHAT OUTPUT
+================================================================================
+
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| Table Name              | Primary Output Stored                                       | Producing Module              |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| candidate               | Resume raw text, clean text, parsed contact & JSONB, ATS    | DB_Store                      |
+|                         | score, final evaluation score                               |                               |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| job_description         | JD raw text, clean text, extracted title & JSONB requirements| DB_Store                      |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| ats_score               | Detailed 6-factor ATS scores, rule score, LLM score         | ATS_calculation / DB_Store    |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| technology_dictionary   | Master list of skills, categories, and alias JSONB arrays   | DB_Store                      |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| technology_alias        | Direct relational alias-to-canonical technology mappings    | DB_Store                      |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| ESCO_Skills             | Reference ESCO standard skills, URIs, and alternate labels  | DB_Store                      |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| bankresume              | 5,194 curated core CS questions, answers, concepts, hashes  | Question_Generation           |
+| (question_bank)         |                                                             |                               |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| exam_sessions           | Exam session metadata, 30-min duration window, session state| Question_Selection_Generation |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| generated_questions     | Dynamically generated Stage 2 adaptive questions from Groq  | Question_Selection_Generation |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| question_exam           | Full 10-question ordered exam paper snapshot (Stage 1 & 2)  | Question_Selection_Generation |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| ai_question_exam        | Candidate-specific Stage 2 adaptive question snapshot (4 q) | Question_Selection_Generation |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| answer_evaluation       | Submitted candidate answers, semantic score (50%), factual  | Answer_Checking               |
+|                         | score (50%), obtained marks, classification                 |                               |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+| final_evaluation_result | Aggregated Stage 1 avg, Stage 2 avg, final 60/40 exam score | Answer_Checking               |
++-------------------------+-------------------------------------------------------------+-------------------------------+
+
+
+================================================================================
+5. END-TO-END PIPELINE WORKFLOW & DATA FLOW
+================================================================================
+
+1. Ingestion & Preprocessing (DB_Store):
+   - Input: Raw resumes from Data/resumes/ and JDs from Data/jds/.
+   - Text extracted via pdfplumber / python-docx / antiword.
+   - NLP cleaning preserves tech terms from `technology_dictionary` and `ESCO_Skills`.
+   - Contact info extracted via regex; structured JSON produced and validated.
+   - Rows inserted into `candidate` and `job_description` tables.
+   - Processed JSON datasets exported to `Data/resumes.json` and `Data/jds.json`.
+
+2. ATS Calculation & Candidate Ranking (ATS_calculation):
+   - Compares candidate's `structured_data` against JD's `structured_data`.
+   - Rule-based calculator computes 6 weighted factors:
+     * Keyword Match (35%)
+     * Semantic Project Similarity (20%)
+     * Job Title Match (10%)
+     * Experience (15%)
+     * Education (15%)
+     * Achievements & Certifications (5%)
+   - Optional LLM scorer (Ollama / Gemini) evaluates candidate fit.
+   - Final ATS score blends rule (60%) and LLM (40%).
+   - Results persisted in `ats_score` table and updated in `candidate.ats_score`.
+   - Candidates ranked by ATS score for shortlisting.
+
+3. Question Bank Curation (Question_Generation):
+   - Generates 5,194 deterministic, balanced technical questions across 14 CS topics and 14 languages.
+   - Deduplicated via SHA-256 hashes.
+   - Persisted in `public.bankresume` (aliased as `question_bank`).
+
+4. Question Selection & Adaptive Generation (Question_Selection_Generation):
+   - Analyzes JD `expected_skills` and classifies them into Core, Changeable, and Unclassified.
+   - Creates an exam session in `exam_sessions`.
+   - Stage 1: Selects 6 questions from `bankresume` matching Core Skills with fixed difficulty:
+     * 3 Easy (6 marks each = 18 marks)
+     * 2 Medium (12 marks each = 24 marks)
+     * 1 Hard (18 marks each = 18 marks)
+     * Stage 1 Total: 60 marks
+   - Saves Stage 1 questions into `question_exam` (questions 1-6).
+   - Candidate completes Stage 1.
+   - Stage 2: Evaluates Stage 1 score, checks adaptive policy:
+     * Score 0-59%   -> Generates 3 Easy + 1 Medium
+     * Score 60-80%  -> Generates 2 Easy + 2 Medium
+     * Score 81-100% -> Generates 3 Medium + 1 Hard
+   - Calls Groq LLM to generate 4 adaptive questions targeting Changeable Skills.
+   - Persists in `ai_question_exam` and `question_exam` (questions 7-10).
+
+5. Answer Evaluation & Final Scoring (Answer_Checking):
+   - Candidate answers are entered via `manual_answer_input.py` or candidate UI.
+   - Stored in `answer_evaluation` with status 'Pending'.
+   - `run_evaluation.py` evaluates all pending submissions:
+     * Computes Semantic Similarity (50%) via Sentence-Transformers embeddings.
+     * Computes Factual Correctness (50%) via NLI claim verification.
+     * Computes `answer_score` = 0.50 * semantic + 0.50 * factual.
+     * Computes `obtained_marks` based on question difficulty weighting.
+     * Sets classification: 'Correct', 'Partially Correct', or 'Incorrect'.
+     * Updates status to 'Completed'.
+   - `final_result.py` aggregates exam results:
+     * Computes Stage 1 average score across the 6 bank questions.
+     * Computes Stage 2 average score across the 4 adaptive questions.
+     * Computes final exam score: 0.60 * Stage 1 avg + 0.40 * Stage 2 avg.
+     * Upserts result into `final_evaluation_result`.
+     * Candidate's final score is updated in `candidate.final_score`.
+================================================================================
+

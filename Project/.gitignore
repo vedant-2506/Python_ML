@@ -64,3 +64,6 @@ dist/
 .coverage
 htmlcov/
 .pytest_cache/
+
+#zip file
+.zip

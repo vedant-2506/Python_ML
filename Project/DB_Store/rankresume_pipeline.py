@@ -25,7 +25,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from ATS_calculation.ats_calculator import combine_ats_scores, evaluate_candidate_against_jd, get_ollama_score
+from ATS_calculation.ats_calculator import (
+    combine_ats_scores,
+    evaluate_candidate_against_jd,
+    get_batch_gemini_evaluations,
+    get_ollama_score,
+    reset_gemini_failure_state,
+)
 from ATS_calculation.ranking import rank_candidates
 
 try:
@@ -63,9 +69,13 @@ ESCO_REQUIRED_COLUMNS = {
 LOGGER = logging.getLogger("rankresume")
 if not LOGGER.handlers:
     DATA_ROOT.joinpath("logs").mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s", handlers=[
-        logging.StreamHandler(), logging.FileHandler(DATA_ROOT / "logs" / "rankresume.log", encoding="utf-8")
-    ])
+    try:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s", handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(DATA_ROOT / "logs" / "rankresume.log", encoding="utf-8")
+        ])
+    except PermissionError:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s", handlers=[logging.StreamHandler()])
 
 TECHNOLOGIES = [
     ("C++", "programming_language", ["cpp", "c plus plus"]),
@@ -1004,13 +1014,23 @@ def create_schema(connection, reset: bool = False) -> None:
     connection.commit()
 
 
-def store_candidate_ats_score(connection, candidate_id: int, jd_id: int, jd_json: dict[str, Any], resume_json: dict[str, Any], llm_score: float | None = None) -> float:
+def store_candidate_ats_score(
+    connection,
+    candidate_id: int,
+    jd_id: int,
+    jd_json: dict[str, Any],
+    resume_json: dict[str, Any],
+    llm_score: float | None = None,
+    score_with_llm: bool = True,
+) -> float:
     factor_result = evaluate_candidate_against_jd(jd_json, resume_json)
     rule_based_score = float(factor_result.rule_based_score)
     if llm_score is not None:
         llm_score_value = float(llm_score)
-    else:
+    elif score_with_llm:
         llm_score_value = get_ollama_score(jd_json, resume_json)
+    else:
+        llm_score_value = None
     final_score = combine_ats_scores(rule_based_score, llm_score_value)
     with connection.cursor() as cursor:
         cursor.execute(
@@ -1062,6 +1082,7 @@ def resolve_target_jd_id(connection, jd_id: int | None = None) -> int | None:
 
 def score_all_candidates(connection, jd_id: int | None = None, llm_score_map: dict[int, float] | None = None) -> list[dict[str, Any]]:
     """Score all candidates against one JD by default, or all JDs when jd_id is explicitly None."""
+    reset_gemini_failure_state()
     target_jd_id = resolve_target_jd_id(connection, jd_id)
     with connection.cursor() as cursor:
         if jd_id is None and target_jd_id is not None:
@@ -1079,20 +1100,81 @@ def score_all_candidates(connection, jd_id: int | None = None, llm_score_map: di
         candidates = cursor.fetchall()
 
     results: list[dict[str, Any]] = []
+    use_batch_scores = llm_score_map is None
     llm_score_map = llm_score_map or {}
+    refresh_llm_scores = os.environ.get("RANKRESUME_REFRESH_LLM_SCORES", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     for jd_row in jds:
         jd_record_id, _, jd_json = jd_row
         jd_data = jd_json if isinstance(jd_json, dict) else json.loads(jd_json or "{}") if isinstance(jd_json, str) else {}
-        for candidate_id, _, resume_json in candidates:
-            candidate_data = resume_json if isinstance(resume_json, dict) else json.loads(resume_json or "{}") if isinstance(resume_json, str) else {}
-            if not jd_data or not candidate_data:
-                continue
-            llm_score = llm_score_map.get(candidate_id)
-            final_score = store_candidate_ats_score(connection, candidate_id, jd_record_id, jd_data, candidate_data, llm_score)
+        cached_scores: dict[int, float] = {}
+        if use_batch_scores and not refresh_llm_scores:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT candidate_id, llm_based_score
+                    FROM ats_score
+                    WHERE jd_id = %s AND llm_based_score IS NOT NULL
+                    """,
+                    (jd_record_id,),
+                )
+                cached_scores = {
+                    candidate_id: float(score)
+                    for candidate_id, score in cursor.fetchall()
+                }
+        candidates_to_score = [
+            (
+                candidate_id,
+                resume_json if isinstance(resume_json, dict) else json.loads(resume_json or "{}") if isinstance(resume_json, str) else {},
+            )
+            for candidate_id, _, resume_json in candidates
+        ]
+        candidates_to_score = [
+            (candidate_id, candidate_data)
+            for candidate_id, candidate_data in candidates_to_score
+            if jd_data and candidate_data
+        ]
+        batch_scores = (
+            get_batch_gemini_evaluations(
+                jd_data,
+                [
+                    {"candidate_id": candidate_id, "structured_data": candidate_data}
+                    for candidate_id, candidate_data in candidates_to_score
+                    if candidate_id not in cached_scores
+                ],
+            )
+            if use_batch_scores
+            and any(candidate_id not in cached_scores for candidate_id, _ in candidates_to_score)
+            else {}
+        )
+        for candidate_id, candidate_data in candidates_to_score:
+            if use_batch_scores:
+                if candidate_id in cached_scores:
+                    llm_score = cached_scores[candidate_id]
+                else:
+                    batch_result = batch_scores.get(str(candidate_id))
+                    llm_score = batch_result["score"] if batch_result else None
+            else:
+                llm_score = llm_score_map.get(candidate_id)
+            final_score = store_candidate_ats_score(
+                connection,
+                candidate_id,
+                jd_record_id,
+                jd_data,
+                candidate_data,
+                llm_score,
+                score_with_llm=not use_batch_scores,
+            )
             results.append({
                 "candidate_id": candidate_id,
                 "jd_id": jd_record_id,
                 "ats_score": final_score,
+                "llm_based_score": llm_score,
+                "scoring_mode": "hybrid" if llm_score is not None else "rule-only",
             })
     return results
 

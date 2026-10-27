@@ -207,6 +207,75 @@ class ATSScoringModeTests(unittest.TestCase):
     def test_unavailable_llm_falls_back_to_rule_score(self):
         self.assertEqual(ats_calculator.combine_ats_scores(80, None), 80)
 
+    def test_score_all_candidates_persists_batched_llm_scores(self):
+        class Cursor:
+            def __init__(self, inserts):
+                self.query = ""
+                self.inserts = inserts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return None
+
+            def execute(self, query, params=None):
+                self.query = query
+                if "INSERT INTO ats_score" in query:
+                    self.inserts.append(params)
+
+            def fetchall(self):
+                if "FROM job_description" in self.query:
+                    return [(3, "Analyst", {"job_title": "Analyst"})]
+                if "FROM candidate" in self.query:
+                    return [
+                        (12, "Candidate A", {"skills": ["Python"]}),
+                        (13, "Candidate B", {"skills": ["SQL"]}),
+                    ]
+                return []
+
+        inserts = []
+        connection = MagicMock()
+        connection.cursor.side_effect = lambda: Cursor(inserts)
+        factors = SimpleNamespace(
+            rule_based_score=80,
+            keyword_score=70,
+            similarity_score=75,
+            title_score=80,
+            experience_score=85,
+            education_score=90,
+            achievement_score=80,
+        )
+        with (
+            patch.object(rankresume_pipeline, "reset_gemini_failure_state") as reset,
+            patch.object(
+                rankresume_pipeline,
+                "get_batch_gemini_evaluations",
+                return_value={
+                    "12": {"score": 88.0, "reason": "matched"},
+                    "13": {"score": 76.0, "reason": "partial match"},
+                },
+            ) as batch_scorer,
+            patch.object(rankresume_pipeline, "get_ollama_score") as individual_scorer,
+            patch.object(
+                rankresume_pipeline,
+                "evaluate_candidate_against_jd",
+                return_value=factors,
+            ),
+        ):
+            rankresume_pipeline.score_all_candidates(connection, jd_id=3)
+
+        reset.assert_called_once_with()
+        batch_scorer.assert_called_once_with(
+            {"job_title": "Analyst"},
+            [
+                {"candidate_id": 12, "structured_data": {"skills": ["Python"]}},
+                {"candidate_id": 13, "structured_data": {"skills": ["SQL"]}},
+            ],
+        )
+        individual_scorer.assert_not_called()
+        self.assertEqual([insert[-1] for insert in inserts], [88.0, 76.0])
+
     def test_failed_evaluation_replaces_old_llm_score_with_null(self):
         cursor = MagicMock()
         cursor.__enter__.return_value = cursor
@@ -271,11 +340,14 @@ class ATSScoringModeTests(unittest.TestCase):
         connection.cursor.side_effect = Cursor
         with (
             patch.dict(os.environ, {}, clear=False),
+            patch.object(rankresume_pipeline, "reset_gemini_failure_state"),
+            patch.object(rankresume_pipeline, "get_batch_gemini_evaluations") as batch_scorer,
             patch.object(rankresume_pipeline, "get_ollama_score") as scorer,
             patch.object(rankresume_pipeline, "store_candidate_ats_score", return_value=90),
         ):
             os.environ.pop("RANKRESUME_REFRESH_LLM_SCORES", None)
             results = rankresume_pipeline.score_all_candidates(connection, jd_id=3)
+        batch_scorer.assert_not_called()
         scorer.assert_not_called()
         self.assertEqual(results[0]["scoring_mode"], "hybrid")
 
@@ -305,11 +377,14 @@ class ATSScoringModeTests(unittest.TestCase):
         connection.cursor.side_effect = Cursor
         with (
             patch.dict(os.environ, {"RANKRESUME_REFRESH_LLM_SCORES": "1"}),
+            patch.object(rankresume_pipeline, "reset_gemini_failure_state"),
+            patch.object(rankresume_pipeline, "get_batch_gemini_evaluations", return_value={}) as batch_scorer,
             patch.object(rankresume_pipeline, "get_ollama_score", return_value=None) as scorer,
             patch.object(rankresume_pipeline, "store_candidate_ats_score", return_value=80),
         ):
             results = rankresume_pipeline.score_all_candidates(connection, jd_id=3)
-        scorer.assert_called_once()
+        batch_scorer.assert_called_once()
+        scorer.assert_not_called()
         self.assertEqual(results[0]["scoring_mode"], "rule-only")
 
 
