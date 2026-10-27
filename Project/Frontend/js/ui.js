@@ -1,0 +1,7 @@
+function toast(message,type='info'){let box=document.querySelector('.toast-stack');if(!box){box=document.createElement('div');box.className='toast-stack';document.body.append(box)}const el=document.createElement('div');el.className=`app-toast ${type}`;el.textContent=message;box.append(el);setTimeout(()=>el.remove(),3500)}
+function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function initials(name){return name.split(' ').map(x=>x[0]).slice(0,2).join('')}
+function modal(title,body,actions=''){const el=document.createElement('div');el.className='modal-backdrop-lite';el.innerHTML=`<div class="modal-lite"><div class="d-flex justify-content-between align-items-center mb-3"><h3 class="m-0 fs-5">${title}</h3><button class="btn-close" aria-label="Close"></button></div><div>${body}</div>${actions?`<div class="d-flex justify-content-end gap-2 mt-4">${actions}</div>`:''}</div>`;document.body.append(el);el.querySelector('.btn-close').onclick=()=>el.remove();return el}
+function rankBadge(rank){return `<span class="rank ${rank<4?'rank-'+rank:''}">${rank}</span>`}
+function scoreBar(score){return `<div class="d-flex align-items-center gap-2"><div class="progress flex-grow-1"><div class="progress-bar" style="width:${score}%"></div></div><b>${score}%</b></div>`}
+window.UI={toast,esc,initials,modal,rankBadge,scoreBar};
