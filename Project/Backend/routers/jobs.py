@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from ..core.database import connection, transaction
 from ..core.security import current_company
-from ..schemas.common import StatusUpdate
+from ..schemas.common import ShortlistRequest, StatusUpdate
 from ..services.ingestion_service import process_job
 from ..services.ats_service import ranked_candidates
 
@@ -78,11 +78,22 @@ def list_jobs(search: str | None = None, status: str | None = None,
     with connection() as conn, conn.cursor() as cur:
         clauses, params = ["comp_id=%s"], [user["comp_id"]]
         if search: clauses.append("job_title ILIKE %s"); params.append(f"%{search}%")
-        if status: clauses.append("status=%s"); params.append(status)
-        cur.execute("SELECT jd_id,job_title,status,positions,created_at FROM job_description WHERE " +
-                    " AND ".join(clauses) + " ORDER BY created_at DESC LIMIT 50 OFFSET %s", (*params,(page-1)*50))
+        if status:
+            clauses.append("j.status=%s")
+            params.append(status)
+        else:
+            clauses.append("(j.status IS NULL OR j.status NOT IN ('Inactive','Closed','Archived'))")
+        cur.execute("""SELECT j.jd_id,j.job_title,j.status,j.positions,j.department,j.experience_level,
+                              j.created_at,COUNT(jc.candidate_id)
+                       FROM job_description j
+                       LEFT JOIN job_candidate jc ON jc.jd_id=j.jd_id
+                       WHERE """ + " AND ".join(clauses) +
+                    " GROUP BY j.jd_id ORDER BY j.created_at DESC LIMIT 50 OFFSET %s",
+                    (*params, (page-1)*50))
         rows = cur.fetchall()
-    return {"items": [{"jd_id":r[0],"title":r[1],"status":r[2],"positions":r[3],"created_at":r[4]} for r in rows],
+    return {"items": [{"jd_id":r[0],"title":r[1],"status":r[2] or "Active","positions":r[3],
+                       "department":r[4],"experience_level":r[5],"created_at":r[6],
+                       "candidate_count":r[7]} for r in rows],
             "page": page}
 
 
@@ -133,3 +144,34 @@ def candidates(jd_id:int, search:str|None=None, page:int=Query(1,ge=1), user=Dep
         rows=ranked_candidates(conn,jd_id)
         if search: rows=[r for r in rows if search.lower() in (r["candidate_name"] or "").lower()]
     return {"items": rows[(page-1)*50:page*50], "page":page, "total":len(rows)}
+
+
+@router.get("/{jd_id}/shortlist")
+def shortlist(jd_id: int, user=Depends(current_company)):
+    _owned_job(jd_id, user["comp_id"])
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT s.candidate_id,c.candidate_name,c.email,s.rank,s.status,s.selected_at
+                       FROM job_shortlist s JOIN candidate c ON c.candidate_id=s.candidate_id
+                       WHERE s.jd_id=%s ORDER BY s.rank,c.candidate_name""", (jd_id,))
+        rows = cur.fetchall()
+    return {"items": [dict(zip(["candidate_id","candidate_name","email","rank","status","selected_at"], r))
+                      for r in rows]}
+
+
+@router.post("/{jd_id}/shortlist")
+def save_shortlist(jd_id: int, payload: ShortlistRequest, user=Depends(current_company)):
+    _owned_job(jd_id, user["comp_id"])
+    with transaction() as conn, conn.cursor() as cur:
+        cur.execute("""SELECT c.candidate_id FROM candidate c
+                       JOIN job_candidate jc ON jc.candidate_id=c.candidate_id
+                       WHERE jc.jd_id=%s AND c.candidate_id=ANY(%s)""",
+                    (jd_id, payload.candidate_ids))
+        allowed = {row[0] for row in cur.fetchall()}
+        invalid = sorted(set(payload.candidate_ids) - allowed)
+        if invalid:
+            raise HTTPException(400, "One or more candidates are not associated with this job")
+        cur.execute("DELETE FROM job_shortlist WHERE jd_id=%s", (jd_id,))
+        cur.executemany("""INSERT INTO job_shortlist(jd_id,candidate_id,rank,status)
+                           VALUES(%s,%s,%s,'SELECTED')""",
+                        [(jd_id, cid, rank) for rank, cid in enumerate(payload.candidate_ids, 1)])
+    return {"items": payload.candidate_ids, "count": len(payload.candidate_ids)}
