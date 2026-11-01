@@ -1,0 +1,5 @@
+from ATS_calculation.ranking import rank_candidates
+
+
+def ranked_candidates(connection, jd_id: int) -> list[dict]:
+    return rank_candidates(connection, jd_id)

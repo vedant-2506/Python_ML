@@ -4,6 +4,10 @@
 from __future__ import annotations
 
 import logging
+import json
+from psycopg2.extras import Json
+from DB_Store import rankresume_pipeline as ingestion
+from ATS_calculation.ats_calculator import get_batch_gemini_evaluations, reset_gemini_failure_state
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,6 +25,7 @@ def execute_step1_ats_calculation(
     connection: Any,
     jd_id: int,
     refresh_llm: bool = False,
+    candidate_ids: list[int] | None = None,
 ) -> List[Dict[str, Any]]:
     """Compute and store ATS match scores for candidates against the given JD.
 
@@ -36,7 +41,7 @@ def execute_step1_ats_calculation(
         os.environ.pop("RANKRESUME_REFRESH_LLM_SCORES", None)
 
     logger.info("Executing ATS scoring against JD ID %s...", jd_id)
-    results = score_all_candidates(connection, jd_id=jd_id)
+    results = score_selected_candidates(connection, jd_id, candidate_ids) if candidate_ids is not None else score_all_candidates(connection, jd_id=jd_id)
     if not results:
         logger.warning("No candidate scores were returned for JD %s.", jd_id)
         return []
@@ -61,6 +66,7 @@ def execute_step2_candidate_ranking(
     connection: Any,
     jd_id: int,
     top_n: int = 5,
+    candidate_ids: list[int] | None = None,
 ) -> List[Dict[str, Any]]:
     """Rank scored candidates for the specified JD and return the Top N cohort.
 
@@ -71,6 +77,11 @@ def execute_step2_candidate_ranking(
     if not all_ranked:
         raise RuntimeError(f"No candidates found with valid ATS scores for JD {jd_id}.")
 
+    if candidate_ids is not None:
+        allowed = set(candidate_ids)
+        all_ranked = [c for c in all_ranked if int(c["candidate_id"]) in allowed]
+    if not all_ranked:
+        raise RuntimeError("No ATS-scored candidates found among the selected resumes.")
     top_candidates = all_ranked[:top_n]
 
     print(f"\nLeaderboard for Job Description ID {jd_id} (Top {len(top_candidates)} of {len(all_ranked)} candidates):")
@@ -130,3 +141,101 @@ def ask_resume_selection() -> tuple[Path, list[Path]]:
         print(f"  - {f.name}")
     return folder, selected
 
+
+
+def import_selected_resumes(connection: Any, selected_files: list[Path]) -> list[int]:
+    """Resolve only selected physical files by SHA256; import new ones without resetting DB.
+
+    Hash matching avoids incorrectly matching same-named resumes from another folder.
+    Every selected file must resolve or the run stops before ATS scoring.
+    """
+    if not selected_files:
+        raise ValueError("No resume files selected.")
+    # Initialize existing dictionaries required by the existing parse_resume() code.
+    ingestion.seed_dictionary(connection)
+    ingestion.load_controlled_labels(connection)
+    try:
+        ingestion.load_esco_labels(connection)
+    except Exception as exc:
+        logger.warning("ESCO labels unavailable; using existing controlled dictionary: %s", exc)
+    ids = []
+    for index, path in enumerate(selected_files, 1):
+        if not path.is_file() or path.suffix.lower() not in ingestion.RESUME_EXTENSIONS:
+            raise ValueError(f"Selected resume is missing or unsupported: {path}")
+        digest = ingestion.sha256_file(path)
+        with connection.cursor() as cur:
+            cur.execute("SELECT candidate_id FROM public.candidate WHERE resume_hash = %s", (digest,))
+            row = cur.fetchone()
+        if row:
+            cid = int(row[0])
+            print(f"[{index}/{len(selected_files)}] Reusing existing resume: {path.name} (ID {cid})")
+        else:
+            print(f"[{index}/{len(selected_files)}] Importing selected resume: {path.name}")
+            raw = ingestion.extract_text(path)
+            if not raw.strip():
+                raise ValueError(f"Resume has no extractable text: {path.name}")
+            contacts = ingestion.extract_contacts(raw)
+            structured = ingestion.parse_resume(raw)
+            errors = ingestion.validate_resume_json(structured)
+            if errors:
+                raise ValueError(f"Resume {path.name} failed validation: {errors}")
+            try:
+                with connection.cursor() as cur:
+                    cur.execute("""INSERT INTO public.candidate
+                        (candidate_name, email, phone, resume_file_name, resume_hash,
+                         raw_text, clean_text, structured_data)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING candidate_id""",
+                        (contacts["name"], contacts["email"], contacts["phone"], path.name,
+                         digest, raw, ingestion.clean_text(raw), Json(structured)))
+                    cid = int(cur.fetchone()[0])
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        ids.append(cid)
+    if len(set(ids)) != len(selected_files):
+        raise ValueError("Some selected files have identical content. Select unique resumes.")
+    print(f"[+] Selected cohort resolved: {len(ids)} resumes. No outside resumes included.")
+    return ids
+
+
+def score_selected_candidates(connection: Any, jd_id: int, candidate_ids: list[int]) -> list[dict]:
+    """Same existing ATS factor and Gemini batch functions, restricted to candidate IDs."""
+    if not candidate_ids:
+        raise ValueError("Cannot score an empty selected cohort.")
+    reset_gemini_failure_state()
+    with connection.cursor() as cur:
+        cur.execute("SELECT structured_data FROM public.job_description WHERE jd_id=%s", (jd_id,))
+        jd_row = cur.fetchone()
+        if not jd_row:
+            raise ValueError(f"JD {jd_id} not found")
+        cur.execute("""SELECT candidate_id, structured_data FROM public.candidate
+                       WHERE candidate_id = ANY(%s) ORDER BY candidate_id""", (candidate_ids,))
+        rows = cur.fetchall()
+        cur.execute("""SELECT DISTINCT ON (candidate_id) candidate_id, llm_based_score
+                       FROM public.ats_score WHERE jd_id=%s AND candidate_id=ANY(%s)
+                         AND llm_based_score IS NOT NULL
+                       ORDER BY candidate_id, computed_at DESC, id DESC""", (jd_id, candidate_ids))
+        cached_rows = cur.fetchall()
+    if len(rows) != len(candidate_ids):
+        raise RuntimeError("One or more selected candidate IDs are missing from PostgreSQL.")
+    jd_data = jd_row[0] if isinstance(jd_row[0], dict) else json.loads(jd_row[0] or '{}')
+    if not jd_data:
+        raise ValueError("Selected JD has no structured data.")
+    parsed = [(int(cid), data if isinstance(data, dict) else json.loads(data or '{}')) for cid, data in rows]
+    if any(not data for _, data in parsed):
+        raise ValueError("A selected resume has no structured data; cannot score it.")
+    refresh = os.getenv('RANKRESUME_REFRESH_LLM_SCORES', '').lower() in {'1','true','yes','on'}
+    cached = {} if refresh else {int(cid): float(score) for cid, score in cached_rows}
+    needs = [{'candidate_id': cid, 'structured_data': data} for cid, data in parsed if cid not in cached]
+    batch = get_batch_gemini_evaluations(jd_data, needs) if needs else {}
+    results = []
+    for cid, data in parsed:
+        item = batch.get(str(cid)) if cid not in cached else None
+        llm_score = cached.get(cid) if cid in cached else (item['score'] if item else None)
+        ats = ingestion.store_candidate_ats_score(
+            connection, cid, jd_id, jd_data, data, llm_score, score_with_llm=False)
+        results.append({'candidate_id': cid, 'jd_id': jd_id, 'ats_score': ats,
+                        'llm_based_score': llm_score,
+                        'scoring_mode': 'hybrid' if llm_score is not None else 'rule-only'})
+    return results

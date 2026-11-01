@@ -1,0 +1,61 @@
+from pathlib import Path
+from typing import Callable
+from psycopg2.extras import Json
+from .zip_utils import extract_resume_zip
+
+
+def process_job(jd_id: int, comp_id: int, title: str, jd_path: Path, zip_path: Path,
+                update: Callable[..., None]) -> None:
+    """Run the existing parser/validator/storage functions for one uploaded job."""
+    from DB_Store import rankresume_pipeline as pipeline
+    import tempfile
+    with pipeline.connect_db() as conn:
+        try:
+            update(stage="extracting", message="Extracting job description")
+            jd_text = pipeline.extract_text(jd_path)
+            jd_data = pipeline.parse_jd(jd_text, title)
+            errors = pipeline.validate_jd_json(jd_data)
+            if errors:
+                raise ValueError("Invalid job description: " + "; ".join(errors))
+            with conn.cursor() as cur:
+                cur.execute("""UPDATE job_description
+                    SET raw_text=%s, clean_text=%s, structured_data=%s, job_title=%s
+                    WHERE jd_id=%s AND comp_id=%s""",
+                    (jd_text, jd_text, Json(jd_data), title, jd_id, comp_id))
+            conn.commit()
+            with tempfile.TemporaryDirectory(prefix="rankresume-resumes-") as work:
+                files = extract_resume_zip(zip_path, Path(work), 2000, 4 * 1024**3)
+                update(stage="storing", total_files=len(files), message="Storing resume data")
+                for index, resume_path in enumerate(files, 1):
+                    try:
+                        raw = pipeline.extract_text(resume_path)
+                        data = pipeline.parse_resume(raw)
+                        errors = pipeline.validate_resume_json(data)
+                        if errors:
+                            raise ValueError("; ".join(errors))
+                        email = data.get("email") or data.get("contact", {}).get("email")
+                        name = data.get("name") or data.get("candidate_name") or resume_path.stem
+                        with conn.cursor() as cur:
+                            cur.execute("""INSERT INTO candidate
+                                (candidate_name,email,resume_file_name,resume_hash,raw_text,clean_text,structured_data,comp_id)
+                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                                ON CONFLICT (resume_hash) DO UPDATE SET comp_id=COALESCE(candidate.comp_id,EXCLUDED.comp_id)
+                                RETURNING candidate_id""",
+                                (name, email, resume_path.name, pipeline.sha256_file(resume_path),
+                                 raw, raw, Json(data), comp_id))
+                            candidate_id = cur.fetchone()[0]
+                            cur.execute("""INSERT INTO job_candidate(jd_id,candidate_id) VALUES(%s,%s)
+                                           ON CONFLICT DO NOTHING""", (jd_id, candidate_id))
+                        conn.commit()
+                    except Exception as exc:
+                        conn.rollback()
+                        update(failed=1, message=f"{resume_path.name}: {exc}")
+                    update(processed=index)
+                update(stage="scoring", message="Calculating ATS scores")
+                from .ats_service import score_job_candidates; score_job_candidates(conn, jd_id)
+                conn.commit()
+            update(stage="done", message="Processing complete", finished=True)
+        except Exception as exc:
+            conn.rollback()
+            update(stage="failed", message=str(exc), finished=True)
+            raise

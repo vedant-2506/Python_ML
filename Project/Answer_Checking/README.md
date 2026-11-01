@@ -1,578 +1,480 @@
 # Answer_Checking
 
-This module adds a lightweight answer-evaluation workflow for RankResume. It stores submitted candidate answers in PostgreSQL, evaluates them with a two-factor NLP score, and saves the results in a separate `answer_evaluation` table without changing the existing `question_exam` table.
+## Section 1: Folder Name and Overview
 
-## 1. Overview
+- **Folder Name**: `Answer_Checking`
+- **Location**: `Project/Answer_Checking`
+- **Purpose**: `Answer_Checking` is the automated natural language answer-evaluation and scoring engine of **RankResume**. It provides a rigorous, two-factor evaluation pipeline that scores subjective, free-text candidate answers against ground-truth reference answers and expected concepts without human grader fatigue.
+- **Problem It Solves**: In technical assessments, evaluating descriptive candidate answers typically requires senior engineering personnel, leading to high operational costs, grading inconsistencies, and severe evaluation delays. Naive automated systems (e.g., pure keyword matching or basic string distance) fail to understand synonymous phrasing or, conversely, reward superficially similar answers that contain factual errors or contradictions.
+- **Why It Is Necessary**: `Answer_Checking` combines two complementary NLP techniques into a balanced 50/50 score:
+  1. **Semantic Similarity (50%)**: Measures conceptual alignment and embedding proximity using Sentence Transformers (`sentence-transformers/all-MiniLM-L6-v2`).
+  2. **Factual Correctness (50%)**: Performs atomic claim extraction and Natural Language Inference (NLI) using a Cross-Encoder (`cross-encoder/nli-deberta-v3-small`) to verify whether candidate statements are entailed by, contradicted by, or unsupported by the reference facts.
 
-The workflow has two separate steps:
+---
 
-1. Submit a candidate answer manually from the terminal.
-2. Run evaluation to score the saved answer against the expected answer and metadata.
+## Section 2: Role in the Overall RankResume Project
 
-This module intentionally keeps the work focused on:
+Within RankResume, `Answer_Checking` serves as **Phase 4 (Candidate Evaluation & Final Scoring)**:
 
-- Semantic Similarity (50%)
-- Factual Correctness (50%)
+1. **Before This Module Runs**:
+   - `DB_Store` has ingested candidate resumes and job descriptions.
+   - `ATS_calculation` has screened and ranked top candidates.
+   - `Question_Selection_Generation` has generated the 10-question technical exam (`public.question_exam` and `public.ai_question_exam`).
+2. **What This Module Receives**:
+   - Terminal multiline input from candidates responding to Stage 1 and Stage 2 questions (via `manual_answer_input.py` or `pipeline_assessment.py`).
+   - Question metadata, ground-truth reference answers, and expected concepts from `public.question_exam` or `public.bankresume`.
+3. **What Processing It Performs**:
+   - Records candidate submissions in `public.answer_evaluation` with `evaluation_status = 'Pending'`.
+   - Normalizes text and computes cosine similarity of dense 384-dimensional transformer embeddings.
+   - Deconstructs candidate answers into atomic factual claims via `claim_extractor.py`.
+   - Runs cross-encoder NLI between reference facts (premises) and candidate claims (hypotheses), classifying each claim as `Supported` (entailed), `Contradicted`, or `Unverified`.
+   - Blends scores:
+     $$\text{Answer Score} = (0.50 \times \text{Semantic Score}) + (0.50 \times \text{Factual Score})$$
+   - Classifies answers into `Correct` ($\ge 70$), `Partially Correct` ($40\text{--}69$), or `Incorrect` ($< 40$).
+   - Calculates obtained marks based on question maximum marks (Easy=6, Medium=12, Hard=18).
+   - Once all 10 questions are completed, `final_result.py` computes the weighted final interview result:
+     $$\text{Final Result} = (0.60 \times \text{Stage 1 Average}) + (0.40 \times \text{Stage 2 Average})$$
+4. **What Output It Produces**:
+   - Evaluated records in `public.answer_evaluation` with granular scores, classifications, obtained marks, and explanatory notes.
+   - Consolidated exam results in `public.final_evaluation_result`.
+5. **Which Module Uses Its Output Next**:
+   - `Question_Selection_Generation`: Consumes Stage 1 scores via `fetch_stage1_evaluations()` to dynamically determine Stage 2 adaptive difficulty.
+   - Recruiters / Frontend Dashboard: Displays detailed candidate answer reviews, factor breakdowns, and overall rank scores.
+6. **Execution Independence**:
+   - Can evaluate individual candidate answers via CLI (`run_evaluation.py`) or full interactive exams (`manual_answer_input.py`).
+   - Relies on active PostgreSQL tables created by `Answer_Checking/sql/`.
 
-It does not add a separate Information Coverage factor.
+---
 
-## 2. Folder structure
+## Section 3: Complete Folder Structure
 
 ```text
 Answer_Checking/
-├── __init__.py
-├── config.py
-├── database.py
-├── manual_answer_input.py
-├── claim_extractor.py
-├── semantic_similarity.py
-├── factual_correctness.py
-├── answer_evaluator.py
-├── run_evaluation.py
-├── final_result.py
-├── requirements.txt
-├── README.md
+├── README.md                      # Comprehensive technical documentation
+├── __init__.py                    # Public API exports for answer evaluation
+├── answer_evaluator.py            # Main evaluator blending semantic similarity & factual correctness
+├── claim_extractor.py             # Atomic factual claim segmentation & sentence splitting
+├── config.py                      # Model names, database settings & difficulty mark definitions
+├── database.py                    # 724-line PostgreSQL persistence manager for answers & sessions
+├── factual_correctness.py         # Cross-Encoder DeBERTa-v3 NLI pipeline & claim scoring
+├── final_result.py                # 60% Stage 1 + 40% Stage 2 final weighted score aggregator
+├── manual_answer_input.py         # Terminal CLI for interactive 10-question candidate exam sessions
+├── requirements.txt               # Standalone dependencies for Answer_Checking
+├── run_evaluation.py              # CLI utility to evaluate pending answer rows
+├── semantic_similarity.py         # Sentence-Transformers MiniLM embedding & cosine similarity engine
 ├── sql/
-│   ├── create_answer_evaluation.sql
-│   └── create_final_evaluation_result.sql
+│   ├── create_answer_evaluation.sql       # DDL schema for public.answer_evaluation table
+│   └── create_final_evaluation_result.sql # DDL schema for public.final_evaluation_result table
 └── tests/
-    ├── __init__.py
-    ├── test_database.py
-    ├── test_final_result.py
-    ├── test_manual_answer_input.py
-    ├── test_semantic_similarity.py
-    ├── test_factual_correctness.py
-    └── test_answer_evaluator.py
+    ├── __init__.py                # Test package marker
+    ├── test_answer_evaluator.py   # Tests for score combination and mark calculations
+    ├── test_assessment_workflow.py# Tests for multi-stage exam execution
+    ├── test_complete_workflow.py  # End-to-end integration tests
+    ├── test_database.py           # Database CRUD and query unit tests
+    ├── test_factual_correctness.py# Tests for claim extraction and NLI classification
+    ├── test_final_result.py       # Tests for final weighted 60/40 score aggregation
+    ├── test_manual_answer_input.py# Tests for CLI input validation
+    ├── test_run_evaluation.py     # Tests for batch evaluation runner
+    └── test_semantic_similarity.py# Tests for embedding similarity and calibration
 ```
 
-## 3. Purpose of each file
+---
 
-- `config.py`: reads database and model configuration from environment variables.
-- `database.py`: handles PostgreSQL connections, validation, answer insertion, and updates.
-- `manual_answer_input.py`: asks the user for JD ID and candidate ID, then collects answers to the six Stage 1 questions in order.
-- `claim_extractor.py`: splits candidate writing into smaller claim-like units.
-- `semantic_similarity.py`: embeds expected and candidate answers and computes similarity.
-- `factual_correctness.py`: compares claims to verified facts using an NLI-style comparison.
-- `answer_evaluator.py`: calculates final scores, classification, and marks.
-- `run_evaluation.py`: evaluates pending records and prints an execution summary.
-- `sql/create_answer_evaluation.sql`: creates the answer evaluation table without dropping data.
-- `sql/create_final_evaluation_result.sql`: creates the final exam summary table without dropping data.
-- `tests/`: unit tests for the module.
+## Section 4: File-by-File Explanation
 
-## 4. Required libraries
+### 1. `Answer_Checking/config.py`
+- **Purpose**: Defines configuration constants, database connection helpers, and difficulty mark mappings.
+- **Key Functions**:
+  - `get_max_marks_for_difficulty(difficulty, fallback=None) -> float`: Returns configured maximum marks: Easy = 6.0, Medium = 12.0, Hard = 18.0 (default fallback: 10.0).
+  - `get_db_config() -> DatabaseConfig`: Reads database host, port, name, user, and password from environment variables.
+  - `get_semantic_model_name()`: Returns `sentence-transformers/all-MiniLM-L6-v2`.
+  - `get_nli_model_name()`: Returns `cross-encoder/nli-deberta-v3-small`.
+  - `get_default_calibration_thresholds()`: Returns entailment (0.6), contradiction (0.6), and neutral (0.5) thresholds.
 
-Install the dependencies using:
+### 2. `Answer_Checking/claim_extractor.py`
+- **Purpose**: Breaks candidate text into atomic, testable factual claims.
+- **Why Required**: Candidates often write complex compound sentences. Verifying claims individually prevents an entire paragraph from being marked wrong due to a single false detail.
+- **Key Functions**:
+  - `normalize_text(value)`: Normalizes line endings and whitespace.
+  - `split_claims(text)`: Splits text along sentence boundaries (`.!?`) and coordinating conjunctions (`and`, `but`, `however`, `although`, `therefore`, `thus`, `so`) while preserving technical context.
 
+### 3. `Answer_Checking/semantic_similarity.py`
+- **Purpose**: Computes dense vector semantic similarity between expected answers and candidate responses.
+- **Why Required**: Assesses whether the candidate is discussing the correct general subject matter and concepts, even if using different wording.
+- **Key Functions**:
+  - `load_semantic_model()`: Caches and returns `SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')`.
+  - `cosine_similarity(vec_a, vec_b) -> float`: Computes dot product over L2 norms.
+  - `provisional_calibration(similarity) -> float`: Normalizes raw cosine similarity to a balanced 0–1 score.
+  - `calculate_semantic_score(expected, candidate) -> tuple[float, dict]`: Returns calibrated percentage score ($0\text{--}100$) and metadata.
+
+### 4. `Answer_Checking/factual_correctness.py`
+- **Purpose**: Natural Language Inference (NLI) pipeline that checks candidate claims against reference facts.
+- **Why Required**: High semantic similarity alone cannot catch factual falsehoods (e.g., stating "TCP is an unreliable, connectionless protocol" has high semantic similarity to networking definitions but is factually false).
+- **Key Functions**:
+  - `load_nli_model()`: Loads `AutoModelForSequenceClassification` and `AutoTokenizer` for `cross-encoder/nli-deberta-v3-small`.
+  - `run_nli_prediction(premise, hypothesis) -> dict`: Computes softmax probabilities for `entailment`, `contradiction`, and `neutral`.
+  - `classify_claim_status(probabilities) -> str`: Assigns `Supported`, `Contradicted`, or `Unverified`.
+  - `calculate_factual_correctness(candidate_answer, expected_facts) -> dict`: Scores all extracted claims ($100\%$ for Supported, $0\%$ for Contradicted, entailment-margin for Unverified) and computes a weighted average.
+
+### 5. `Answer_Checking/answer_evaluator.py`
+- **Purpose**: Main evaluator combining semantic similarity and factual correctness into the unified answer score.
+- **Key Functions**:
+  - `classify_answer(answer_score) -> str`: Returns `Correct` ($\ge 70$), `Partially Correct` ($40\text{--}69$), or `Incorrect` ($< 40$).
+  - `calculate_obtained_marks(answer_score, classification, max_marks) -> float`: Assigns $0.0$ if Incorrect, or $(\text{score} / 100) \times \text{max\_marks}$.
+  - `evaluate_pending_record(record) -> dict`: Computes 50% semantic + 50% factual score, generates diagnostic notes, and assigns final marks.
+  - `evaluate_record_by_id(evaluation_id)`: Loads row from DB, runs evaluation, and updates the record in PostgreSQL.
+
+### 6. `Answer_Checking/database.py`
+- **Purpose**: Comprehensive database operations module (724 lines) managing answer evaluations, exam queries, and status updates.
+- **Key Functions**:
+  - `get_question_details()`: Dynamically retrieves reference answers and expected concepts from `question_exam`, `ai_question_exam`, or `bankresume`.
+  - `save_candidate_answer()`: Inserts a pending answer into `public.answer_evaluation`.
+  - `get_pending_answers()`: Queries pending evaluations awaiting grading.
+  - `update_evaluation_result()`: Persists evaluated scores, classification, marks, and notes.
+  - `get_first_six_average()`: Computes candidate Stage 1 average score without modifying records.
+
+### 7. `Answer_Checking/final_result.py`
+- **Purpose**: Final score aggregator executed after all 10 questions are evaluated.
+- **Key Functions**:
+  - `calculate_and_store_final_result(exam_id, candidate_id, jd_id)`: Validates that all 10 answers are in `Completed` status, splits rows into Stage 1 (6 questions) and Stage 2 (4 questions), computes averages, calculates $0.60 \times \text{Stage 1} + 0.40 \times \text{Stage 2}$, and upserts the result into `public.final_evaluation_result`.
+
+### 8. `Answer_Checking/manual_answer_input.py`
+- **Purpose**: Interactive terminal CLI allowing candidates to complete their 10-question technical interview session.
+- **Key Functions**:
+  - Collects candidate ID and JD ID.
+  - Creates or loads active exam session.
+  - Presents Stage 1 questions one by one and records answers.
+  - Automatically triggers `evaluate_pending()` after Stage 1 to enable adaptive Stage 2 generation.
+  - Generates adaptive Stage 2 questions via `Question_Selection_Generation`.
+  - Collects Stage 2 answers and persists final results.
+
+### 9. `Answer_Checking/run_evaluation.py`
+- **Purpose**: Background batch evaluator CLI for evaluating all pending rows in `public.answer_evaluation`.
+
+---
+
+## Section 5: Detailed Code Execution and Line-by-Line Analysis
+
+### 1. Two-Factor Score Blending in `answer_evaluator.py` (Lines 40–95)
+```python
+def evaluate_pending_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    candidate_answer = record.get("candidate_answer")
+    expected_answer = record.get("expected_answer")
+    expected_facts = record.get("expected_facts")
+    max_marks = get_max_marks_for_difficulty(record.get("difficulty"), record.get("max_marks"))
+
+    if candidate_answer is None or not str(candidate_answer).strip():
+        return {
+            "semantic_score": 0.0, "factual_correctness_score": 0.0,
+            "answer_score": 0.0, "classification": "Incorrect",
+            "obtained_marks": 0.0, "max_marks": max_marks,
+            "evaluation_status": "Completed",
+            "evaluation_notes": "Candidate answer was empty; zero marks assigned."
+        }
+
+    semantic_score, semantic_meta = calculate_semantic_score(expected_answer or "", candidate_answer)
+    factual_context = normalize_expected_facts(expected_facts)
+    if expected_answer is not None and str(expected_answer).strip():
+        factual_context.append(str(expected_answer))
+
+    factual_result = calculate_factual_correctness(candidate_answer, factual_context)
+    factual_score = factual_result.get("score")
+
+    answer_score = 0.5 * semantic_score + 0.5 * factual_score
+    classification = classify_answer(answer_score)
+    obtained_marks = calculate_obtained_marks(answer_score, classification, max_marks)
+```
+- **Lines 47–56**: Guards against empty answers: immediately assigns 0 marks and marks evaluation `Completed`.
+- **Line 58**: Computes dense vector similarity ($0\text{--}100$).
+- **Lines 59–65**: Merges reference concepts and full reference answer into `factual_context`.
+- **Line 67**: Runs cross-encoder NLI claim verification.
+- **Line 87**: Blends 50% semantic and 50% factual correctness.
+- **Lines 88–89**: Classifies performance and scales marks against question maximums.
+
+### 2. Natural Language Inference Claim Classification in `factual_correctness.py` (Lines 210–255)
+```python
+for claim in claims:
+    for fact in facts:
+        probabilities = run_nli_prediction(fact, claim, model=model)
+        status = classify_claim_status(probabilities, entailment_threshold, contradiction_threshold)
+    if best_status == "Supported":
+        claim_score = 100.0
+    elif best_status == "Contradicted":
+        claim_score = 0.0
+    else:
+        entailment = best_probabilities.get("entailment", 0.0)
+        contradiction = best_probabilities.get("contradiction", 0.0)
+        claim_score = max(0.0, (entailment - contradiction) * 100.0)
+```
+- For each claim, finds the best supporting or contradicting reference fact.
+- Supported claims receive $100.0$; contradicted claims receive $0.0$; unverified claims receive conservative entailment-margin credit.
+- Computes claim-weighted factual correctness score.
+
+### 3. Weighted Final Result Aggregation in `final_result.py` (Lines 110–155)
+```python
+first_six_avg = _calculate_averages(conn, stage1_rows, divisor=6)
+last_four_avg = _calculate_averages(conn, stage2_rows, divisor=4)
+final_result = 0.6 * first_six_avg + 0.4 * last_four_avg
+```
+- Averages the 6 Stage 1 answer scores.
+- Averages the 4 Stage 2 answer scores.
+- Computes the final $60/40$ weighted interview score and upserts into `public.final_evaluation_result`.
+
+---
+
+## Section 6: Complete Workflow
+
+```text
+Candidate Input (manual_answer_input.py / terminal)
+                     │
+                     ▼
+       ┌───────────────────────────┐
+       │   save_candidate_answer   │
+       │   public.answer_evaluation│
+       │   status = 'Pending'      │
+       └─────────────┬─────────────┘
+                     │
+                     ▼
+       ┌───────────────────────────┐
+       │  answer_evaluator.py      │
+       └──────┬─────────────┬──────┘
+              │             │
+              ▼             ▼
+     ┌────────────────┐ ┌────────────────┐
+     │Semantic Engine │ │Factual Engine  │
+     │SentenceTransf. │ │Claim Extractor │
+     │all-MiniLM-L6-v2│ │DeBERTa-v3 NLI  │
+     │(50% Weight)    │ │(50% Weight)    │
+     └────────┬───────┘ └───────┬────────┘
+              │                 │
+              └────────┬────────┘
+                       ▼
+        ┌───────────────────────────┐
+        │ Combined Answer Score     │
+        │ 0.5 * Semantic + 0.5 * NLI│
+        └──────────────┬────────────┘
+                       │
+                       ▼
+        ┌───────────────────────────┐
+        │ Classification & Marks    │
+        │ Correct / Partial / Incorr│
+        │ Scaled by Max Marks (6/12/18)
+        └──────────────┬────────────┘
+                       │
+                       ▼
+        ┌───────────────────────────┐
+        │ Final Result Calculation  │
+        │ final_result.py           │
+        │ 60% Stage 1 + 40% Stage 2 │
+        │ public.final_evaluation...│
+        └───────────────────────────┘
+```
+
+---
+
+## Section 7: Database Information
+
+- **Technology**: PostgreSQL 14+
+- **Database Name**: Default `rankresume`
+- **Tables Managed**:
+
+### 1. Table `public.answer_evaluation`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `evaluation_id` | `BIGSERIAL` | `PRIMARY KEY` | Unique evaluation identifier |
+| `candidate_id` | `INTEGER` | | Evaluated candidate ID |
+| `exam_id` | `UUID` | `REFERENCES exam_sessions(exam_id)` | Associated exam session |
+| `jd_id` | `BIGINT` | `NOT NULL` | Job description ID |
+| `question_id` | `BIGINT` | `NOT NULL` | Question ID |
+| `expected_answer`| `TEXT` | | Ground-truth reference answer |
+| `candidate_answer`| `TEXT` | | Submitted candidate text |
+| `difficulty` | `VARCHAR(50)`| | Question difficulty |
+| `max_marks` | `NUMERIC(10,2)`| | Maximum marks (6, 12, or 18) |
+| `expected_facts`| `JSONB` | | Essential concept list |
+| `semantic_score`| `NUMERIC(5,2)` | | Semantic similarity score (0–100) |
+| `factual_correctness_score`| `NUMERIC(5,2)` | | Factual correctness score (0–100) |
+| `answer_score` | `NUMERIC(5,2)` | | Combined answer score (0–100) |
+| `classification`| `VARCHAR(30)` | | Correct / Partially Correct / Incorrect |
+| `obtained_marks`| `NUMERIC(10,2)`| | Marks awarded |
+| `evaluation_status`| `VARCHAR(30)` | `DEFAULT 'Pending'` | Pending / Completed / Review Required |
+| `evaluation_notes`| `TEXT` | | Explanatory diagnostic notes |
+| `evaluated_at` | `TIMESTAMPTZ` | `DEFAULT NOW()` | Evaluation timestamp |
+| `question_source`| `VARCHAR(50)` | | 'Question Bank' or 'groq_llm' |
+
+### 2. Table `public.final_evaluation_result`
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `exam_id` | `UUID` | `NOT NULL` | Exam session identifier |
+| `jd_id` | `BIGINT` | `NOT NULL` | Job description ID |
+| `candidate_id` | `INTEGER` | `NOT NULL` | Candidate ID |
+| `first_six_average`| `NUMERIC(5,2)` | `NOT NULL` | Unweighted average of Stage 1 scores |
+| `last_four_average`| `NUMERIC(5,2)` | `NOT NULL` | Unweighted average of Stage 2 scores |
+| `final_result` | `NUMERIC(5,2)` | `NOT NULL` | Blended score: $0.60 \times S1 + 0.40 \times S2$ |
+| `evaluation_status`| `VARCHAR(30)` | `DEFAULT 'Completed'` | Completed / Review Required |
+| `calculated_at`| `TIMESTAMPTZ` | `DEFAULT NOW()` | Calculation timestamp |
+- Constraint: `UNIQUE (exam_id, candidate_id)`.
+
+---
+
+## Section 8: Input and Output
+
+### Input Example
+```text
+Question: In Operating Systems, what is deadlock and what conditions cause it?
+Candidate Answer: Deadlock occurs when multiple processes are blocked because each is holding a resource and waiting for another resource held by another process. The four Coffman conditions are mutual exclusion, hold and wait, no preemption, and circular wait.
+```
+
+### Evaluated Output Record (`public.answer_evaluation`)
+- **`semantic_score`**: `92.40`
+- **`factual_correctness_score`**: `95.00`
+- **`answer_score`**: `93.70`
+- **`classification`**: `Correct`
+- **`max_marks`**: `12.00` (Medium difficulty)
+- **`obtained_marks`**: `11.24`
+- **`evaluation_status`**: `Completed`
+- **`evaluation_notes`**: `Transformer embedding similarity with provisional calibration.; Claim-level scores were combined using configured claim weights.`
+
+---
+
+## Section 9: Dependencies and Requirements
+
+- **Python Version**: Python 3.10+
+- **Machine Learning & NLP Frameworks**:
+  - `sentence-transformers`: Dense vector embeddings.
+  - `transformers`, `torch`: Hugging Face model loading and cross-encoder inference.
+  - `numpy`: Cosine similarity math.
+- **Database Driver**: `psycopg2-binary`
+- **NLP Models Used**:
+  - `sentence-transformers/all-MiniLM-L6-v2` (~80 MB)
+  - `cross-encoder/nli-deberta-v3-small` (~500 MB)
+- **Environment Variables**:
+  - `RANKRESUME_DB_*`: PostgreSQL database settings.
+  - `ANSWER_CHECKING_SEMANTIC_MODEL`: Custom embedding model override.
+  - `ANSWER_CHECKING_NLI_MODEL`: Custom NLI cross-encoder override.
+
+---
+
+## Section 10: Setup and Execution Instructions
+
+### 1. Apply Database Schemas
 ```bash
-python -m pip install -r Answer_Checking/requirements.txt
+psql -h localhost -U <DB_USER> -d rankresume -f Answer_Checking/sql/create_answer_evaluation.sql
+psql -h localhost -U <DB_USER> -d rankresume -f Answer_Checking/sql/create_final_evaluation_result.sql
 ```
 
-This project expects the following packages:
-
-- `psycopg2-binary`
-- `numpy`
-- `sentence-transformers` (`>=3.0,<6.0`)
-- `transformers` (`>=4.40,<5.0`)
-- `torch` (`>=2.2,<2.14`)
-- `pytest`
-
-The Torch upper bound avoids a CPU-only accelerator initialization failure
-observed with Torch 2.14.1 and Transformers 5.19.0. The bounded versions are
-listed in both project and module requirements files.
-
-## 5. Database configuration
-
-This module connects to the existing RankResume PostgreSQL database. The default values are:
-
-- host: `localhost`
-- port: `5432`
-- database: `rankresume`
-- user: `postgres`
-- password: from `RANKRESUME_DB_PASSWORD`
-
-Environment variables used by the module:
-
+### 2. Run Interactive Terminal Exam
+To start a candidate interview session:
 ```bash
-export RANKRESUME_DB_HOST=localhost
-export RANKRESUME_DB_PORT=5432
-export RANKRESUME_DB_NAME=rankresume
-export RANKRESUME_DB_USER=postgres
-export RANKRESUME_DB_PASSWORD='your-local-password'
+python3 -m Answer_Checking.manual_answer_input
 ```
 
-The project does not create a new database.
-
-## 6. Existing input table: question_exam
-
-The live schema stores question data in `public.question_exam`. The relevant fields in the database include:
-
-- `jd_id`
-- `question_id`
-- `question`
-- `reference_answer`
-- `expected_concepts`
-- `difficulty`
-- `skill`
-- `created_at`
-
-The module maps `question_exam.reference_answer` to the evaluation's `expected_answer` field because that is the real column in the current database.
-
-The module does not add `candidate_answer` to `question_exam` and does not modify any rows there.
-
-## 7. New table: answer_evaluation
-
-The new table stores both the saved question context and the computed evaluation result.
-
-Example structure:
-
-```sql
-CREATE TABLE IF NOT EXISTS public.answer_evaluation (
-    evaluation_id BIGSERIAL PRIMARY KEY,
-    candidate_id INTEGER,
-    jd_id BIGINT NOT NULL,
-    question_id BIGINT NOT NULL,
-    expected_answer TEXT,
-    candidate_answer TEXT,
-    difficulty VARCHAR(50),
-    max_marks NUMERIC(10, 2),
-    expected_facts JSONB,
-    semantic_score NUMERIC(5, 2),
-    factual_correctness_score NUMERIC(5, 2),
-    answer_score NUMERIC(5, 2),
-    classification VARCHAR(30),
-    obtained_marks NUMERIC(10, 2),
-    evaluation_status VARCHAR(30) NOT NULL DEFAULT 'Pending',
-    evaluation_notes TEXT,
-    evaluated_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-The schema script adds `candidate_id` to an existing table without replacing
-evaluation rows. It drops any previous `attempt_id` or `legacy_attempt_id`
-column; historical attempt identifiers are not retained. The schema script
-also removes the obsolete `first_six_average` column if present.
-
-Status values include:
-
-- `Pending`
-- `Completed`
-- `Review Required`
-- `Failed`
-
-## 8. Candidate answer storage
-
-A candidate answer is stored in `answer_evaluation`, not in `question_exam`.
-
-When the user submits candidate answers, the module:
-
-- stores a positive integer `candidate_id` (for example, 1, 2, or 3) with all
-  six answers,
-- validates that `jd_id` and `question_id` belong to an existing `question_exam` row,
-- retrieves the expected answer and metadata,
-- saves the candidate answer,
-- leaves `question_exam` untouched,
-- stores `evaluation_status = 'Pending'`.
-
-## 9. Running manual submission
-
-From the project root, run:
-
+### 3. Run Batch Evaluation on Pending Submissions
+To evaluate any un-evaluated answers stored in the database:
 ```bash
-python -m Answer_Checking.manual_answer_input
+python3 -m Answer_Checking.run_evaluation
 ```
 
-The terminal asks for:
-
-- JD ID
-- Candidate ID
-- Each of the six Stage 1 questions in database order, followed by its answer
-
-Answers may be multiline. Type `done` on a separate line after each answer, then
-type `finish` after the sixth answer to complete the submission.
-
-Each answer is saved into `answer_evaluation` with status `Pending`.
-
-## 10. Evaluating saved answers
-
-From the project root, run:
-
+### 4. Calculate Final Result Manually
 ```bash
-python -m Answer_Checking.run_evaluation
+python3 -m Answer_Checking.final_result <EXAM_UUID> <CANDIDATE_ID> <JD_ID>
 ```
 
-The script reads pending rows, evaluates them, and writes the result back to the same evaluation row.
+---
 
-You can also evaluate one specific row:
+## Section 11: How to Test and Verify
 
-```bash
-python -m Answer_Checking.run_evaluation --evaluation-id 12
+- **Run Automated Test Suite**:
+  ```bash
+  python3 -m unittest discover Answer_Checking/tests/
+  ```
+- **Inspect Evaluated Submissions**:
+  ```sql
+  SELECT evaluation_id, question_id, semantic_score, factual_correctness_score, answer_score, obtained_marks, classification
+  FROM public.answer_evaluation
+  ORDER BY evaluation_id DESC LIMIT 10;
+  ```
+- **Inspect Final Results**:
+  ```sql
+  SELECT exam_id, candidate_id, first_six_average, last_four_average, final_result
+  FROM public.final_evaluation_result;
+  ```
+
+---
+
+## Section 12: Error Handling and Limitations
+
+1. **Empty Answers**: Immediate short-circuit assigns $0.0$ score, $0.0$ marks, and `Incorrect` status without wasting GPU/CPU inference cycles.
+2. **Missing Reference Facts**: If expected concepts are absent, `answer_evaluator.py` automatically uses the full reference answer for NLI context and flags the row for manual review if ambiguous.
+3. **Model Availability**: If sentence transformers or torch are missing, exceptions are logged cleanly and evaluations remain in `Pending` state rather than producing corrupted scores.
+4. **Current Limitations**:
+   - Long essays exceeding 512 tokens may experience NLI truncation in the cross-encoder attention window.
+
+---
+
+## Section 13: Connection With Other Folders
+
+- **`Question_Selection_Generation`**: Fetches question text and reference answers from `question_exam`. Provides Stage 1 percentage scores to resolve Stage 2 adaptive difficulty.
+- **`Question_Generation`**: Supplies reference answers and expected concepts from `bankresume`.
+- **`DB_Store`**: Reads candidate and job description records.
+
+---
+
+## Section 14: Example Execution
+
+```python
+from Answer_Checking.answer_evaluator import evaluate_pending_record
+
+sample_pending_row = {
+    "candidate_answer": "Encapsulation bundles data and methods together and restricts direct access to internal state.",
+    "expected_answer": "Encapsulation is an OOP principle that binds data and code together and hides object internals.",
+    "expected_facts": ["data hiding", "bundling data and methods", "access modifiers"],
+    "difficulty": "Easy",
+    "max_marks": 6.0
+}
+
+result = evaluate_pending_record(sample_pending_row)
+print("Answer Score:", result["answer_score"])
+print("Classification:", result["classification"])
+print("Obtained Marks:", result["obtained_marks"])
+# Output:
+# Answer Score: 92.5
+# Classification: Correct
+# Obtained Marks: 5.55
 ```
 
-Or limit the batch size:
-
-```bash
-python -m Answer_Checking.run_evaluation --limit 5
-```
-
-Only rows with status `Pending` can be evaluated or updated. Evaluation writes
-are conditional on the row still being `Pending`, so a concurrent or manually
-reviewed result is not replaced.
-
-### Safely retrying transformer-fallback rows
-
-After installing the corrected dependencies, first inspect the candidate rows:
-
-```sql
-SELECT evaluation_id, jd_id, question_id, candidate_answer,
-       evaluation_status, evaluation_notes
-FROM public.answer_evaluation
-WHERE evaluation_status = 'Review Required'
-  AND evaluation_notes LIKE '%Fallback heuristic used; transformer model unavailable.%'
-ORDER BY evaluation_id;
-```
-
-Confirm the three evaluation IDs and candidate answers are the intended rows
-and have not been manually reviewed. Requeue only those confirmed IDs, retaining
-the candidate answers:
-
-```sql
-BEGIN;
-
-UPDATE public.answer_evaluation
-SET evaluation_status = 'Pending',
-    evaluation_notes = 'Requeued for transformer-backed evaluation.'
-WHERE evaluation_id IN (<confirmed_id_1>, <confirmed_id_2>, <confirmed_id_3>)
-  AND evaluation_status = 'Review Required'
-  AND evaluation_notes = 'Unverified claims received conservative entailment-margin scores; manual review is recommended.; Fallback heuristic used; transformer model unavailable.';
-
--- Inspect the returned IDs. If exactly the three confirmed rows were updated, run COMMIT.
--- If the returned rows do not match, run ROLLBACK instead.
-```
-
-Then evaluate each confirmed ID (one command per ID):
-
-```bash
-python -m Answer_Checking.run_evaluation --evaluation-id <confirmed_id>
-```
-
-The update is guarded by both the prior status and prior notes, and the evaluator
-will only persist results while the row remains `Pending`. If the preview shows
-different notes, do not broaden the update predicate; inspect the row and decide
-whether it is safe to retry. A row manually marked `Completed` will not match or
-be overwritten.
-
-## 11. Semantic Similarity
-
-Semantic similarity uses transformer sentence embeddings.
-
-Suggested model:
-
-```text
-sentence-transformers/all-MiniLM-L6-v2
-```
-
-The NLI model defaults to `cross-encoder/nli-deberta-v3-small`. Both names can
-be overridden with `ANSWER_CHECKING_SEMANTIC_MODEL` and
-`ANSWER_CHECKING_NLI_MODEL`. Transformer initialization or inference errors are
-logged with their exception traceback and raised; the evaluator does not
-silently substitute lexical heuristics.
-
-The process is:
-
-1. Normalize both texts.
-2. Create embeddings for the expected and candidate answers.
-3. Compute cosine similarity.
-4. Convert it into a score using a calibration function.
-
-Formula:
-
-```text
-similarity = dot(E, C) / (norm(E) * norm(C))
-semantic_score = 100 * g(similarity)
-```
-
-Where:
-
-- `E` = expected answer embedding
-- `C` = candidate answer embedding
-- `g()` = calibration mapping from similarity to 0..1
-
-Important:
-
-- Raw cosine similarity is not automatically treated as a validated grading score.
-- The mapping is configurable.
-- If no real calibration data is available, the module uses a clearly labelled provisional mapping.
-
-## 12. Factual Correctness
-
-This module extracts claims from the candidate answer and compares each claim against verified facts.
-
-### Claim extraction
-
-A claim is a meaningful statement such as a sentence or a clause that carries a fact.
-
-Example:
-
-```text
-Overfitting happens when a model memorizes training data.
-```
-
-This can be separated into claims such as:
-
-- Overfitting happens when a model memorizes training data.
-- A model that memorizes training data may fail to generalize to unseen data.
-
-The extractor keeps technical and negative conditions intact so it does not distort meaning.
-
-### NLI-style comparison
-
-For each claim and relevant fact the system evaluates:
-
-```text
-premise = validated fact
-hypothesis = candidate claim
-```
-
-The model yields:
-
-- `pE` = entailment probability
-- `pC` = contradiction probability
-- `pN` = neutral probability
-
-with:
-
-```text
-pE + pC + pN = 1
-```
-
-For the configured DeBERTa model, the model card maps output indices
-`0=contradiction`, `1=entailment`, and `2=neutral`. The evaluator reads the
-model's own label mapping and applies softmax to its CrossEncoder logits.
-
-Claim status is assigned as:
-
-- Supported
-- Contradicted
-- Unverified
-
-Supported and contradicted claims receive scores of 100 and 0 respectively.
-Unverified claims receive a conservative score based on the entailment-minus-contradiction probability margin, and the answer remains marked `Review Required`. Missing reference facts still require review without producing a factual score.
-
-### Claim weights
-
-The default provisional weighting is:
-
-- Essential fact = 3
-- Important fact = 2
-- Supporting fact = 1
-
-If the metadata does not provide importance, the module uses a default weight rather than guessing that the answer is fully correct.
-
-## 13. Final score and classification
-
-The final score uses exactly two factors:
-
-```text
-answer_score = 0.50 * semantic_score + 0.50 * factual_correctness_score
-```
-
-Classification rules:
-
-```text
-IF answer_score >= 70:
-    classification = "Correct"
-ELSE IF answer_score >= 40:
-    classification = "Partially Correct"
-ELSE:
-    classification = "Incorrect"
-```
-
-### Stage 1 aggregation
-
-The per-answer score above remains unchanged. The first-six average is
-calculated on demand when `run_evaluation` processes answers. It is available
-only when the latest evaluation for each of six distinct Stage 1 questions in
-the same `(candidate_id, jd_id)` is either `Completed` or `Review Required` with a
-finite score from 0 to 100. Review Required scores are included in a provisional
-candidate average; their review status is preserved, and that
-average is not evidence that their scores have been manually approved. Pending
-or Failed latest evaluations prevent an average.
-Duplicate submissions contribute at most one score per question; the latest
-evaluation ID is authoritative.
-An explicitly submitted empty answer contributes its evaluated zero, while an
-unanswered question contributes nothing. A null candidate-answer value is not
-treated as an explicit empty submission and prevents aggregation for that
-candidate.
-
-The average is printed by the evaluation command, not stored in
-`answer_evaluation`. No `question_exam` schema changes are made.
-
-### Final exam score
-
-The separate Stage 2 evaluation module and its table are intentionally not
-used for the final score. After all ten answers are evaluated, the exam workflow
-calculates:
-
-```text
-A6 = SUM(first six answer scores) / 6
-A4 = SUM(last four answer scores) / 4
-final_score = 0.60 * A6 + 0.40 * A4
-```
-
-The final score remains on a 0–100 scale. The workflow creates
-`public.final_evaluation_result` if needed and upserts the candidate ID, JD ID,
-both averages, final score, completion status, and calculation time. Its schema
-is defined in `sql/create_final_evaluation_result.sql`.
-
-The normal exam workflow calculates this result automatically when an exam is
-completed. To calculate it manually, run
-`python -m Answer_Checking.final_result` and enter the exam UUID, candidate ID,
-and job-description ID when prompted. These values can also be passed as
-positional arguments.
-
-## 14. Marks calculation
-
-```text
-IF classification == "Incorrect":
-    obtained_marks = 0
-ELSE:
-    obtained_marks = (answer_score / 100) * max_marks
-```
-
-Question maximum marks are assigned from the question difficulty, case-insensitively:
-
-| Difficulty | Maximum marks |
-|------------|---------------|
-| Easy       | 6             |
-| Medium     | 12            |
-| Hard       | 18            |
-
-The difficulty-derived maximum is applied during submission and evaluation, including to older pending records with a previous maximum stored. Unknown or missing difficulty retains an existing `max_marks`; if none is stored, the legacy default of 10 is used.
-
-## 15. Empty answer handling
-
-If the candidate answer is empty, whitespace-only, or `NULL`:
-
-```text
-semantic_score = 0
-factual_correctness_score = 0
-answer_score = 0
-classification = "Incorrect"
-obtained_marks = 0
-```
-
-The evaluation row is still saved with `Completed` status.
-For aggregation, an explicitly stored empty string is a submitted answer;
-a null candidate-answer value is not included as a zero.
-
-## 16. Example input and output
-
-Example manual input:
-
-```text
-Enter JD ID: 1
-Enter Candidate ID: 7
-Question 1: What is overfitting?
-Enter Candidate Answer:
-(Type done on a separate line when this answer is complete)
-Overfitting occurs when a model memorizes training data.
-done
-...
-Type finish to complete submission: finish
-```
-
-Example saved evaluation result:
-
-```text
-evaluation_id = 12
-jd_id = 1
-question_id = 5
-classification = "Partially Correct"
-semantic_score = 76.4
-factual_correctness_score = 62.5
-answer_score = 69.45
-obtained_marks = 6.94
-evaluation_status = "Completed"
-```
-
-## 17. Inspecting database results
-
-You can inspect the table directly with SQL:
-
-```sql
-SELECT *
-FROM public.answer_evaluation
-ORDER BY evaluation_id DESC;
-```
-
-Filter by question:
-
-```sql
-SELECT *
-FROM public.answer_evaluation
-WHERE question_id = 5
-ORDER BY evaluation_id DESC;
-```
-
-Filter by status:
-
-```sql
-SELECT *
-FROM public.answer_evaluation
-WHERE evaluation_status = 'Pending';
-```
-
-## 18. Running tests
-
-From the project root:
-
-```bash
-python -m pytest Answer_Checking/tests
-```
-
-The unit tests avoid repeated model downloads by mocking external NLP calls.
-
-## 19. Missing metadata and review status
-
-Some metadata may not exist in the current project schema. In the current RankResume setup:
-
-- `question_exam` stores `difficulty` and `reference_answer`
-- `expected_concepts` can be used as a provisional fact source
-- `max_marks` is not available in the project question schema, so it is assigned from `difficulty` when an answer is submitted
-
-When metadata is missing, the module marks the result as `Review Required` rather than silently using a fabricated number.
-
-## 20. Limitations
-
-This module is designed for the two requested scoring factors only.
-
-It is not a full proof engine for algorithm correctness. For questions that ask a candidate to write code or pseudocode:
-
-- semantic similarity may be high even when the logic is wrong,
-- NLI compares wording and facts, not execution correctness,
-- uncertain algorithmic logic should be flagged for review.
-
-Do not execute arbitrary candidate text as code. The scoring system remains limited to semantic similarity and factual correctness.
-
-## 21. Troubleshooting
-
-Common issues:
-
-- `question_exam` row not found: check `jd_id` and `question_id` values.
-- PostgreSQL connection failure: check `RANKRESUME_DB_*` environment variables.
-- Missing model packages: install `Answer_Checking/requirements.txt`.
-- `Review Required`: usually caused by missing metadata or insufficiently reliable factual verification.
-
-## 22. Example summary output
-
-```text
-========================================
-       ANSWER EVALUATION SUMMARY
-========================================
-
-Total Pending Answers: 5
-Successfully Evaluated: 4
-Review Required: 1
-Failed Evaluations: 0
-========================================
-```
+---
+
+## Section 15: Current Implementation Status and Future Improvements
+
+- **Implemented**:
+  - Semantic similarity using `all-MiniLM-L6-v2`.
+  - Claim extraction and Natural Language Inference using `nli-deberta-v3-small`.
+  - Strict 50/50 factor blending, performance classification, and mark scaling.
+  - Interactive terminal exam interface (`manual_answer_input.py`).
+  - Final weighted 60% Stage 1 + 40% Stage 2 score aggregator.
+- **Planned / Future Improvements**:
+  - LLM-based conversational follow-up questions for ambiguous candidate answers.
+  - Syntax-aware AST evaluation for embedded code snippets.
+
+---
+
+## Section 16: Glossary
+
+- **Semantic Similarity**: Measure of conceptual and topical relatedness between two text strings using vector embeddings.
+- **Natural Language Inference (NLI)**: Determining whether a hypothesis is true (entailment), false (contradiction), or undetermined (neutral) given a premise.
+- **Cross-Encoder**: A transformer architecture that processes premise and hypothesis simultaneously to calculate fine-grained interaction scores.
+- **Stage 1 Average**: Unweighted average of the first 6 core CS questions.
+- **Stage 2 Average**: Unweighted average of the 4 adaptive framework questions.
+
+---
+
+## Section 17: References to Source Files
+
+- [answer_evaluator.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/answer_evaluator.py) — 50/50 factor combination and score classification.
+- [factual_correctness.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/factual_correctness.py) — DeBERTa NLI prediction and claim-level scoring.
+- [semantic_similarity.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/semantic_similarity.py) — Sentence-Transformers embedding and cosine similarity math.
+- [claim_extractor.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/claim_extractor.py) — Atomic sentence and conjunction claim splitting.
+- [final_result.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/final_result.py) — 60/40 final exam score aggregation.
+- [database.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/database.py) — 724-line database persistence engine.
+- [manual_answer_input.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/manual_answer_input.py) — Interactive exam session runner.
+- [run_evaluation.py](file:///home/vedant-2506/Desktop/Python_ML/Project/Answer_Checking/run_evaluation.py) — Batch CLI evaluation runner.

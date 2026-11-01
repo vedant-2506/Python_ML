@@ -1,0 +1,25 @@
+document.addEventListener('DOMContentLoaded', async () => {
+  renderShell();
+  const page = document.querySelector('#pageContent');
+  const jobId = new URLSearchParams(location.search).get('job_id');
+  page.innerHTML = `<div class="page-head"><div><h1 class="page-title">Candidates</h1><p class="page-subtitle">Review ATS-ranked candidates and send assessments.</p></div></div>
+    <div class="card-panel table-card"><div class="table-head"><input id="candidateSearch" class="form-control" placeholder="Search name or email"></div>
+    <div class="table-responsive"><table class="table"><thead><tr><th>Rank</th><th>Name</th><th>ATS Score</th></tr></thead><tbody id="candidateBody"></tbody></table></div></div>
+    <div class="card-panel p-3 mt-3 d-flex align-items-center gap-3"><b>Select Top N</b><input id="topN" class="form-control" type="number" min="1" max="100" value="5" style="width:80px"><button id="selectTop" class="btn btn-outline-primary">Select</button><button id="sendExam" class="btn btn-primary ms-auto">Send Exam</button></div>`;
+  let rows = [];
+  const draw = () => {
+    const query = document.querySelector('#candidateSearch').value.toLowerCase();
+    document.querySelector('#candidateBody').innerHTML = rows.filter(c => `${c.candidate_name || ''}`.toLowerCase().includes(query))
+      .map(c => `<tr><td>${c.rank}</td><td>${UI.esc(c.candidate_name || 'Unnamed')}</td><td>${c.ats_score}</td></tr>`).join('');
+  };
+  if (!jobId) { page.querySelector('#candidateBody').innerHTML = '<tr><td colspan="3">Select a job to view candidates.</td></tr>'; return; }
+  try { const result = await API.get(`/api/jobs/${jobId}/candidates`); rows = result.items || []; draw(); }
+  catch (_) { page.querySelector('#candidateBody').innerHTML = '<tr><td colspan="3">Candidates could not be loaded.</td></tr>'; return; }
+  document.querySelector('#candidateSearch').oninput = draw;
+  document.querySelector('#selectTop').onclick = () => rows.slice(0, +document.querySelector('#topN').value).forEach(c => c.selected = true);
+  document.querySelector('#sendExam').onclick = async () => {
+    const selected = rows.filter(c => c.selected).map(c => c.candidate_id);
+    const result = await API.post(`/api/jobs/${jobId}/send-exam`, selected.length ? { candidate_ids: selected } : { top_n: +document.querySelector('#topN').value });
+    UI.toast(`${result.sent.length} sent; ${result.skipped.length} skipped.`, 'success');
+  };
+});

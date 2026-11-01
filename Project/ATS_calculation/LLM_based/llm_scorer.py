@@ -201,7 +201,11 @@ def _record_transient_failure(reason: str, code: int, quota_ids: list[str]) -> N
     """Skip the current call; only open the breaker after repeated failures in a row."""
     global _consecutive_failures
     _consecutive_failures += 1
-    limit = _env_int("GEMINI_MAX_CONSECUTIVE_FAILURES", 5)
+    # A per-minute quota is a run-wide condition: retrying another candidate
+    # immediately only repeats the same rejected request.
+    limit = 1 if reason.startswith("per-minute rate limit") else _env_int(
+        "GEMINI_MAX_CONSECUTIVE_FAILURES", 5
+    )
     log.warning(
         "Gemini transient failure (%s/%s in a row): status=%s reason=%s; "
         "skipping this request",

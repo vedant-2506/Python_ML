@@ -27,8 +27,8 @@ logs/
 Data/*.json
 
 # Raw resume/JD data
-#Data/resumes/
-#Data/jds/
+Data/resumes/
+Data/jds/
 
 # Generated outputs
 outputs/
@@ -67,3 +67,4 @@ htmlcov/
 
 #zip file
 .zip
+
