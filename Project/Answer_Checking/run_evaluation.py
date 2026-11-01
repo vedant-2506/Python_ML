@@ -6,6 +6,7 @@ import argparse
 import traceback
 
 from .answer_evaluator import evaluate_pending_record
+from .final_result import calculate_and_store_final_result
 from .database import (
     get_evaluation_by_id,
     get_first_six_average,
@@ -68,7 +69,18 @@ def main() -> None:
     }
     for candidate_id, jd_id in sorted(candidates):
         try:
-            average = get_first_six_average(candidate_id, jd_id)
+            exam_id = next(
+                (record.get("exam_id") for record in records
+                 if record.get("candidate_id") == candidate_id
+                 and record.get("jd_id") == jd_id
+                 and record.get("exam_id")),
+                None,
+            )
+            average = (
+                get_first_six_average(candidate_id, jd_id, exam_id=exam_id)
+                if exam_id
+                else get_first_six_average(candidate_id, jd_id)
+            )
             if average is None:
                 print(
                     f"First Six Average for JD {jd_id}, candidate {candidate_id}: "
@@ -79,6 +91,8 @@ def main() -> None:
                     f"First Six Average for JD {jd_id}, candidate {candidate_id}: "
                     f"{average} / 100 (provisional if any answer requires review)."
                 )
+            if exam_id:
+                calculate_and_store_final_result(exam_id, candidate_id, jd_id)
         except Exception as exc:
             print(
                 f"Could not calculate First Six Average for JD {jd_id}, "

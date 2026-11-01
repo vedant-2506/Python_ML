@@ -134,9 +134,10 @@ def _insert_stage1_rows(connection, exam_id: uuid.UUID, jd_id: int, questions: l
             cursor.execute(
                 """INSERT INTO question_exam
                     (exam_id, jd_id, question_order, stage, source, question_id,
-                     question, reference_answer, expected_concepts, difficulty, skill)
+                     question, reference_answer, expected_concepts, difficulty, skill, max_marks)
                    VALUES (%s, %s, %s, 1, 'Question Bank', %s, %s, %s,
-                           %s::jsonb, %s, %s)""",
+                           %s::jsonb, %s, %s,
+                           CASE %s WHEN 'Easy' THEN 6 WHEN 'Medium' THEN 12 WHEN 'Hard' THEN 18 END)""",
                 (
                     str(exam_id),
                     jd_id,
@@ -147,6 +148,7 @@ def _insert_stage1_rows(connection, exam_id: uuid.UUID, jd_id: int, questions: l
                     concepts,
                     item.difficulty,
                     item.subject,
+                    item.difficulty,
                 ),
             )
         cursor.execute(
@@ -175,11 +177,25 @@ def select_questions(
 
 
 def create_exam(connection, jd_id: int, rng=None) -> tuple[uuid.UUID, dict[str, Any]]:
-    """Compatibility wrapper; normal callers now reuse a JD's latest session."""
+    """Create an isolated, fully prepared exam snapshot for one invitation."""
     _lock_jd(connection, jd_id)
-    exam_id = _get_or_create_exam(connection, jd_id)
+    started_at = datetime.utcnow()
+    exam_id = uuid.uuid4()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO exam_sessions
+                 (exam_id, jd_id, started_at, ends_at, duration_minutes, status)
+               VALUES (%s, %s, %s, %s, 30, 'STAGE1_READY')""",
+            (str(exam_id), jd_id, started_at, started_at + timedelta(minutes=30)),
+        )
+    selection = select_questions(connection, jd_id, rng=rng, exam_id=exam_id)
+    if len(selection.questions) != 6:
+        raise RuntimeError(
+            f"Expected exactly six Stage 1 questions for exam {exam_id}, "
+            f"found {len(selection.questions)}"
+        )
     jd = _fetch_jd(connection, jd_id)
-    return exam_id, {"jd": jd}
+    return exam_id, {"jd": jd, "questions": selection.questions}
 
 
 def select_and_store_stage1(connection, exam_id, jd_id: int, rng=None):

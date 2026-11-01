@@ -1,0 +1,15 @@
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.5 var(--font); }
+a { color: var(--primary); text-decoration: none; }
+a:hover { color: var(--primary-hover); }
+h1,h2,h3,h4,h5 { font-weight: 600; letter-spacing: -.02em; }
+button,input,select,textarea { font: inherit; }
+.form-control,.form-select { height: 40px; border: 1px solid var(--border); border-radius: 8px; }
+.form-control:focus,.form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px #2563eb22; }
+.page-title { margin: 0; font-size: 24px; }
+.page-subtitle { color: var(--muted); margin: 5px 0 0; }
+.text-muted { color: var(--muted)!important; }
+.required::after { content: " *"; color: var(--danger); }
+.optional { color: var(--muted); font-size: 12px; font-weight: 400; }
+.empty-state { padding: 48px 20px; text-align: center; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms!important; transition-duration: .01ms!important; } }

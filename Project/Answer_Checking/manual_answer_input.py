@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import uuid
 from collections import Counter
 from typing import Any
 
@@ -201,7 +202,7 @@ def _collect_stage1(
         print(f"Question {order}: {question['question']}")
         answer = collect_multiline_answer()
         save_candidate_answer(jd_id, qid, answer, candidate_id, exam_id)
-        print(f"Question {order} saved successfully.")
+        print(f"Question {order} saved.")
         answered_ids.add(qid)
 
 
@@ -223,14 +224,15 @@ def _collect_stage2(
         order = int(question["question_order"])
         if generated_id in saved_ids:
             continue
-        print(f"\nQuestion {order} of 10")
+        display_order = order + 6
+        print(f"\nQuestion {display_order} of 10")
         diff = question.get("difficulty")
         if diff:
             print(f"Difficulty: {diff}")
-        print(f"Question {order}: {question['question']}")
+        print(f"Question {display_order}: {question['question']}")
         answer = collect_multiline_answer()
         save_candidate_answer(jd_id, generated_id, answer, candidate_id, exam_id)
-        print(f"Question {order} saved successfully.")
+        print(f"Question {display_order} saved.")
         saved_ids.add(generated_id)
 
 
@@ -251,7 +253,7 @@ def _verify_completed_exam(
     ]
     if len(valid_rows) != 10 or len(stage1_rows) != 6 or len(stage2_rows) != 4:
         raise Stage2StateError(
-            f"final verification failed: expected 6 Stage 1 and 4 Stage 2 answers "
+            f"final verification failed: expected 6 Stage 1 and 4 Stage 2 answers "
             f"(total 10). Found {len(stage1_rows)} Stage 1, "
             f"{len(stage2_rows)} Stage 2, total {len(valid_rows)}."
         )
@@ -380,7 +382,8 @@ def main() -> None:
             update_exam_session_status(exam_id, "STAGE1_SUBMITTED")
         except Exception:
             pass
-        print("\nStage 1 answers saved: 6/6")
+        print("\nStage 1 answers saved successfully.")
+        print("Stage 1 answers saved: 6/6")
         print("Evaluating initial answers...")
         _evaluate_pending(exam_id, candidate_id, jd_id)
         evaluated_stage1 = get_exam_evaluation_rows(exam_id, candidate_id, jd_id)
@@ -434,12 +437,17 @@ def main() -> None:
         print("Stage 2 evaluations: 4\n")
         if current_status == "COMPLETED":
             print("Exam status: COMPLETED")
-            calculate_and_store_final_result(exam_id, candidate_id, jd_id)
-            print("Final result calculated and stored successfully.\n")
+            try:
+                uuid.UUID(str(exam_id))
+            except ValueError:
+                print("Final result not persisted: exam ID is not a valid UUID.")
+            else:
+                calculate_and_store_final_result(exam_id, candidate_id, jd_id)
+                print("Final result calculated and stored successfully.\n")
             print(
-                "All ten questions and candidate responses have been saved and "
-                "verified successfully."
+                "All ten questions and candidate responses have been saved."
             )
+            print("All ten questions and candidate responses have been verified successfully.")
         else:
             print(f"Exam status: {current_status or 'INCOMPLETE'}")
     except (ValueError, Stage2StateError) as exc:
