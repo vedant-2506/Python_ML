@@ -48,8 +48,8 @@ tmp/
 temp/
 
 # OS files
-.DS_Store
-Thumbs.db
+#.DS_Store
+#Thumbs.db
 
 # IDE
 .vscode/
