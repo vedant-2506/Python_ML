@@ -97,16 +97,13 @@ async function bindAuthForm(form, type) {
       if (type === 'signup') {
         form.innerHTML = `
           <div class="text-center py-4">
-            <i class="bi bi-envelope-check text-success fs-1"></i>
-            <h3 class="mt-3">Verify your email</h3>
-            <p class="text-muted">
-              Your account has been created. Open the verification link
-              sent to your email before logging in.
-            </p>
-            <a class="btn btn-primary" href="login.html">Back to login</a>
+            <i class="bi bi-check-circle text-success fs-1"></i>
+            <h3 class="mt-3">Account created</h3>
+            <p class="text-muted">Your account is ready. You can now log in.</p>
+            <a class="btn btn-primary" href="login.html">Continue to login</a>
           </div>
         `;
-        showMessage('Account created. Please verify your email.', 'success');
+        showMessage('Account created. You can now log in.', 'success');
         return;
       }
 

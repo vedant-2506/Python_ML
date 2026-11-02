@@ -1,10 +1,8 @@
-from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from ..core.database import transaction
 from ..core.security import create_access_token, hash_password, verify_password
 from ..core.config import get_settings
 from ..schemas.common import LoginRequest, SignupRequest
-from ..services.mail_service import send_email
 from jose import jwt
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -17,22 +15,12 @@ def signup(payload: SignupRequest):
             cur.execute("SELECT comp_id FROM company WHERE lower(email)=lower(%s)", (payload.email,))
             if cur.fetchone():
                 raise HTTPException(409, "An account with that email already exists")
-            cur.execute("""INSERT INTO company(company_name,email,password_hash)
-                           VALUES(%s,%s,%s) RETURNING comp_id""",
+            cur.execute("""INSERT INTO company(company_name,email,password_hash,is_verified)
+                           VALUES(%s,%s,%s,TRUE) RETURNING comp_id""",
                         (payload.company_name, payload.email, hash_password(payload.password)))
             comp_id = cur.fetchone()[0]
-    verification = jwt.encode(
-        {"comp_id": comp_id, "exp": datetime.now(timezone.utc) + timedelta(hours=72)},
-        get_settings().jwt_secret, algorithm="HS256"
-    )
-    link = f"{get_settings().frontend_base_url}/html/login.html?verify={verification}"
-    try:
-        send_email(payload.email, "Verify your RankResume account",
-                   f"<p>Welcome to RankResume.</p><p><a href='{link}'>Verify your email</a></p>")
-    except Exception as exc:
-        raise HTTPException(503, "Account created, but verification email could not be sent") from exc
-    return {"comp_id": comp_id, "email": payload.email, "is_verified": False,
-            "message": "Account created. Verify your email before logging in."}
+    return {"comp_id": comp_id, "email": payload.email, "is_verified": True,
+            "message": "Account created. You can now log in."}
 
 
 @router.get("/verify-email")
