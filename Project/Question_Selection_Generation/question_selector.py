@@ -271,7 +271,6 @@ def select_stage1_questions(
     if shortages:
         details = ", ".join(f"{key}: {value} missing" for key, value in shortages.items())
         raise ValueError(f"Question Bank cannot satisfy 3 Easy, 2 Medium, 1 Hard ({details})")
-    rng.shuffle(chosen)
     questions = [
         SelectedQuestion(row[0], row[1], row[2], row[3], row[4], row[5], normalize_difficulty(row[6]))
         for row in chosen

@@ -53,7 +53,8 @@ class TestFactualCorrectness(unittest.TestCase):
     def test_missing_expected_facts_marks_review(self):
         result = calculate_factual_correctness("The model never learns.", [])
         self.assertEqual(result["status"], "Review Required")
-        self.assertIsNone(result["score"])
+        self.assertEqual(result["score"], 0.0)
+        self.assertIn("placeholder", result["notes"])
 
     def test_unverified_claim_gets_conservative_numeric_score(self):
         result = calculate_factual_correctness(
@@ -66,7 +67,8 @@ class TestFactualCorrectness(unittest.TestCase):
         self.assertIsNotNone(result["score"])
         self.assertGreaterEqual(result["score"], 0.0)
         self.assertLessEqual(result["score"], 100.0)
-        self.assertIn("entailment-margin", result["notes"])
+        self.assertEqual(result["classification"], "Partially Correct")
+        self.assertIn("Neutral NLI evidence is not proof of incorrectness.", result["notes"])
 
     def test_model_loading_error_is_logged_and_raised(self):
         with (

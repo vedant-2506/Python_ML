@@ -40,17 +40,9 @@ except ImportError as error:  # Keep imports usable for schema-only notebook cel
     extract_external_skills = None
     SKILL_EXTRACTOR_IMPORT_ERROR = error
 
-#<<<<<<< Updated upstream
-PROJECT_ROOT = str(Path(__file__).resolve().parent)
-DATA_ROOT = Path(os.environ.get("RANKRESUME_DATA_ROOT", str(Path(PROJECT_ROOT).parent / "Data")))
-RESUMES_DIR = str(DATA_ROOT / "resumes")
-JDS_DIR = str(DATA_ROOT / "jds")
-#=======
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = PROJECT_ROOT / "Data"
+DATA_ROOT = Path(os.environ.get("RANKRESUME_DATA_ROOT", str(PROJECT_ROOT / "Data")))
 RESUMES_DIR = DATA_ROOT / "resumes"
 JDS_DIR = DATA_ROOT / "jds"
-#>>>>>>> Stashed changes
 
 DB_HOST = os.environ.get("RANKRESUME_DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("RANKRESUME_DB_PORT", "5432"))

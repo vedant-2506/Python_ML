@@ -1,15 +1,31 @@
 from functools import lru_cache
 from pathlib import Path
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     env: str = "dev"
-    db_host: str = "localhost"
-    db_port: int = 5432
-    db_name: str = "rankresume"
-    db_user: str = "root"
-    db_password: str = "root"
+    db_host: str = Field(
+        default="localhost",
+        validation_alias=AliasChoices("DB_HOST", "RANKRESUME_DB_HOST"),
+    )
+    db_port: int = Field(
+        default=5432,
+        validation_alias=AliasChoices("DB_PORT", "RANKRESUME_DB_PORT"),
+    )
+    db_name: str = Field(
+        default="rankresume",
+        validation_alias=AliasChoices("DB_NAME", "RANKRESUME_DB_NAME"),
+    )
+    db_user: str = Field(
+        default="postgres",
+        validation_alias=AliasChoices("DB_USER", "RANKRESUME_DB_USER"),
+    )
+    db_password: str = Field(
+        default="postg",
+        validation_alias=AliasChoices("DB_PASSWORD", "RANKRESUME_DB_PASSWORD"),
+    )
     jwt_secret: str = "change-me"
     jwt_expire_minutes: int = 480
     frontend_origin: str = "http://localhost:5500"
@@ -29,7 +45,10 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parents[1] / ".env",
+        env_file=(
+            Path(__file__).resolve().parents[1] / ".env",
+            Path(__file__).resolve().parents[2] / ".env",
+        ),
         env_prefix="",
         extra="ignore",
         case_sensitive=False,

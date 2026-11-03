@@ -1,3 +1,4 @@
+import random
 import unittest
 
 from Question_Selection_Generation.question_selector import (
@@ -97,6 +98,43 @@ class QuestionSelectionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "cannot satisfy"):
             select_stage1_questions(EmptyConnection(), ["SQL"])
+
+    def test_selected_questions_follow_required_difficulty_order(self):
+        rows_by_difficulty = {}
+        question_id = 1
+        for difficulty, count in (("Easy", 4), ("Medium", 3), ("Hard", 2)):
+            rows_by_difficulty[difficulty.casefold()] = [
+                (question_id + index, "SQL", "topic", f"{difficulty} question {index}",
+                 "answer", "concept", difficulty)
+                for index in range(count)
+            ]
+            question_id += count
+
+        class QuestionCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, query, params):
+                self.difficulty = params[0]
+
+            def fetchall(self):
+                return rows_by_difficulty[self.difficulty]
+
+        class QuestionConnection:
+            def cursor(self):
+                return QuestionCursor()
+
+        questions = select_stage1_questions(
+            QuestionConnection(), ["SQL"], rng=random.Random(7)
+        )
+
+        self.assertEqual(
+            [question.difficulty for question in questions],
+            ["Easy", "Easy", "Easy", "Medium", "Medium", "Hard"],
+        )
 
 
 if __name__ == "__main__":

@@ -115,7 +115,7 @@ Question_Selection_Generation/
 - **Purpose**: Skill classification and Stage 1 question bank selection.
 - **Key Classes & Functions**:
   - `classify_skills(expected_skills, project_vocabulary) -> SkillClassification`: Categorizes skills into `core` (e.g., Python, C++, Data Structures), `changeable` (e.g., React, Django, Docker), and `unresolved`.
-  - `select_stage1_questions(connection, core_subjects, rng=None) -> list[SelectedQuestion]`: Queries `public.question_bank` for 3 Easy, 2 Medium, and 1 Hard questions across the matched core subjects. Shuffles the selection and validates uniqueness.
+  - `select_stage1_questions(connection, core_subjects, rng=None) -> list[SelectedQuestion]`: Queries `public.question_bank` for 3 Easy, 2 Medium, and 1 Hard questions across the matched core subjects. Randomly samples within each difficulty while preserving the required order: Questions 1–3 Easy, 4–5 Medium, and 6 Hard.
   - `validate_stage1_questions(questions)`: Verifies non-empty fields, exactly 6 questions, unique question IDs, unique texts, and exact difficulty counts.
 
 ### 6. `Question_Selection_Generation/exam_workflow.py`
@@ -179,7 +179,7 @@ def select_stage1_questions(
 - **Lines 254–255**: Iterates through required difficulties: Easy (3), Medium (2), Hard (1).
 - **Lines 256–260**: Queries `question_bank` for questions matching the candidate's core subjects, filtering out already-selected IDs and duplicate texts.
 - **Lines 264–267**: Uses cryptographically safe random sampling (`SystemRandom`) to pick questions without replacement.
-- **Lines 275–282**: Shuffles the final 6 questions and runs `validate_stage1_questions()` to ensure zero duplicate IDs, correct difficulties, and non-empty fields.
+- **Question selection**: Randomly samples within each difficulty band, then runs `validate_stage1_questions()` to ensure zero duplicate IDs, the required display order, and non-empty fields.
 
 ### 2. Adaptive Policy Logic in `adaptive_policy.py` (Lines 15–75)
 ```python

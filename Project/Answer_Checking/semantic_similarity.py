@@ -6,7 +6,6 @@ silently replacing transformer similarity with a heuristic.
 """
 
 from __future__ import annotations
-
 import logging
 import re
 from functools import lru_cache
@@ -24,7 +23,7 @@ def _normalize_text(value: str) -> str:
     if value is None:
         return ""
     text = str(value)
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = text.replace("\r\n", "\n").replace("\r", "\n") #Because the text extracted from different resume formats or documents may contain different new line characters.
     return re.sub(r"\s+", " ", text).strip()
 
 

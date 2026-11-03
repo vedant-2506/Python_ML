@@ -114,7 +114,7 @@ Answer_Checking/
   - `load_nli_model()`: Loads `AutoModelForSequenceClassification` and `AutoTokenizer` for `cross-encoder/nli-deberta-v3-small`.
   - `run_nli_prediction(premise, hypothesis) -> dict`: Computes softmax probabilities for `entailment`, `contradiction`, and `neutral`.
   - `classify_claim_status(probabilities) -> str`: Assigns `Supported`, `Contradicted`, or `Unverified`.
-  - `calculate_factual_correctness(candidate_answer, expected_facts) -> dict`: Scores all extracted claims ($100\%$ for Supported, $0\%$ for Contradicted, entailment-margin for Unverified) and computes a weighted average.
+  - `calculate_factual_correctness(candidate_answer, expected_facts) -> dict`: Classifies extracted claims as Supported, Contradicted, or Unverified, then assigns a policy-band score using reference coverage and supported/contradicted claim rates. Unverified evidence requires review and is not treated as proof of falsity.
 
 ### 5. `Answer_Checking/answer_evaluator.py`
 - **Purpose**: Main evaluator combining semantic similarity and factual correctness into the unified answer score.
@@ -207,8 +207,8 @@ for claim in claims:
         claim_score = max(0.0, (entailment - contradiction) * 100.0)
 ```
 - For each claim, finds the best supporting or contradicting reference fact.
-- Supported claims receive $100.0$; contradicted claims receive $0.0$; unverified claims receive conservative entailment-margin credit.
-- Computes claim-weighted factual correctness score.
+- Supported and contradicted claims determine the supported/contradicted rates; reference coverage contributes to the overall policy-band score.
+- Unverified claims require review. Missing reference facts or extractable claims return a zero placeholder with `Review Required`, not a factual finding.
 
 ### 3. Weighted Final Result Aggregation in `final_result.py` (Lines 110–155)
 ```python
